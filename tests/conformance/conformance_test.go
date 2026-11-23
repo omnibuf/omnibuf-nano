@@ -324,4 +324,48 @@ func TestCrossLanguageConformance(t *testing.T) {
 			t.Fatalf("oneof nested arm mismatch:\norig:    %v\ndecoded: %v", orig, decoded)
 		}
 	})
+
+	t.Run("RejectInvalidWireVectors", func(t *testing.T) {
+		writeTag := func(fnum uint32, wt uint8) []byte {
+			return wire.AppendVarint(nil, (uint64(fnum)<<4)|uint64(wt))
+		}
+		arr := func(fnum uint32, body ...byte) []byte {
+			b := writeTag(fnum, wire.WireArray)
+			b = wire.AppendVarint(b, uint64(len(body)))
+			return append(b, body...)
+		}
+		mp := func(fnum uint32, body ...byte) []byte {
+			b := writeTag(fnum, wire.WireMap)
+			b = wire.AppendVarint(b, uint64(len(body)))
+			return append(b, body...)
+		}
+
+		invalidCases := []struct {
+			name string
+			raw  []byte
+		}{
+			{"unknown_wire_array_short_body", arr(999, wire.WireUint)},
+			{"unknown_wire_map_short_body", mp(999, wire.WireString, wire.WireUint)},
+			{"unknown_wire_extended_empty_body", append(writeTag(999, wire.WireExtended), 0x01)},
+			{"array_empty_body", arr(21)},
+			{"array_count_exceeds_body", arr(21, wire.WireUint, 0x07, 0x03)},
+			{"array_trailing_bytes", arr(21, wire.WireUint, 0x03, 0x03, 0x05)},
+			{"map_empty_body", mp(28)},
+			{"map_count_exceeds_body", mp(28, wire.WireString, wire.WireUint, 0x05, 0x01)},
+			{"invalid_utf8_string", append(append(writeTag(15, wire.WireString), 0x05), 0xFF, 0xFE)},
+			{"reserved_varint_prefix", append(writeTag(1, wire.WireUint), 0x08)},
+		}
+
+		for _, tc := range invalidCases {
+			t.Run(tc.name, func(t *testing.T) {
+				cmd := exec.Command(h.binPath)
+				cmd.Stdin = bytes.NewReader(tc.raw)
+				var stderr bytes.Buffer
+				cmd.Stderr = &stderr
+				if err := cmd.Run(); err == nil {
+					t.Fatalf("expected c_roundtrip to reject %s, but it succeeded", tc.name)
+				}
+			})
+		}
+	})
 }

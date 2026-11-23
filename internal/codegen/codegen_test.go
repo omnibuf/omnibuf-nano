@@ -174,3 +174,16 @@ func TestUnboundedFieldErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestBoundsExceedingUint16Rejected(t *testing.T) {
+	fd := compileProtoDescriptor(t, map[string]string{
+		"huge.proto": "syntax = \"proto3\";\nmessage Huge { string s = 1; }\n",
+	}, "huge.proto")
+	sidecar, err := options.Parse(strings.NewReader("Huge.s max_size:70000\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codegen.Generate(fd, codegen.Config{Sidecar: sidecar}); err == nil {
+		t.Fatal("expected codegen error when max_size exceeds uint16 limit")
+	}
+}

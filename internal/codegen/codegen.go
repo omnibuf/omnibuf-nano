@@ -196,6 +196,13 @@ func (g *fileGenerator) buildMessage(md protoreflect.MessageDescriptor, mapParen
 			fopts = g.resolveFieldOptions(fd)
 		}
 
+		if fopts.MaxCount > 65535 {
+			return nil, fmt.Errorf("%s: max_count %d exceeds uint16 limit (65535)", fd.FullName(), fopts.MaxCount)
+		}
+		if fopts.MaxSize > 65535 || (fd.Kind() == protoreflect.BytesKind && !fopts.FixedLength && fopts.MaxSize > 65533) {
+			return nil, fmt.Errorf("%s: max_size %d exceeds uint16 descriptor limit", fd.FullName(), fopts.MaxSize)
+		}
+
 		rf := &resolvedField{
 			desc:  fd,
 			cName: sanitizeIdent(string(fd.Name())),
@@ -436,6 +443,7 @@ func (g *fileGenerator) renderSource(headerPath string) (string, error) {
 	fmt.Fprintf(&b, "#include \"%s\"\n\n", filepath.Base(headerPath))
 
 	for _, rm := range g.messages {
+		fmt.Fprintf(&b, "typedef char _ob_check_%s_size[(sizeof(%s) <= 65535u) ? 1 : -1];\n", rm.cName, rm.cName)
 		if len(rm.fields) > 0 {
 			fmt.Fprintf(&b, "static const ob_field_t %s_fields[%d] = {\n", rm.cName, len(rm.fields))
 			for i, rf := range rm.fields {

@@ -435,6 +435,77 @@ static void test_error_cases(void) {
         ob_istream_t is = ob_istream_from_buffer(buf, os.bytes_written);
         assert(!ob_decode(&is, &SubMsg_msg, &dst));
     }
+
+    /* Embedded NUL in WireString must be rejected */
+    {
+        uint8_t buf[16];
+        ob_ostream_t os = ob_ostream_from_buffer(buf, sizeof(buf));
+        assert(ob_write_tag(&os, 2u, OB_WIRE_STRING));
+        assert(ob_varint_encode(&os, 5u));
+        const uint8_t nul_str[5] = {'a', 'b', '\0', 'c', 'd'};
+        assert(ob_write(&os, nul_str, 5u));
+
+        SubMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(buf, os.bytes_written);
+        assert(!ob_decode(&is, &SubMsg_msg, &dst));
+    }
+
+    /* ob_decode_noinit with corrupted pre-existing array/map count > max_count must not underflow */
+    {
+        uint8_t buf[16];
+        ob_ostream_t os = ob_ostream_from_buffer(buf, sizeof(buf));
+        assert(ob_write_tag(&os, 12u, OB_WIRE_ARRAY));
+        assert(ob_varint_encode(&os, 3u));
+        const uint8_t body[3] = {OB_WIRE_UINT, 0x03u, 0x03u}; /* elem=UINT, count=1, val=1 */
+        assert(ob_write(&os, body, 3u));
+
+        AllMsg dst;
+        memset(&dst, 0, sizeof(dst));
+        dst.nums_count = 999u; /* Exceeds array_size (8) */
+        ob_istream_t is = ob_istream_from_buffer(buf, os.bytes_written);
+        assert(!ob_decode_noinit(&is, &AllMsg_msg, &dst));
+    }
+
+    /* Bogus WireArray count > remaining bytes must be rejected before touching dst */
+    {
+        uint8_t buf[16];
+        ob_ostream_t os = ob_ostream_from_buffer(buf, sizeof(buf));
+        assert(ob_write_tag(&os, 12u, OB_WIRE_ARRAY));
+        assert(ob_varint_encode(&os, 3u));
+        const uint8_t body[3] = {OB_WIRE_UINT, 0x0Fu, 0x03u}; /* count=7, only 1 byte left */
+        assert(ob_write(&os, body, 3u));
+
+        AllMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(buf, os.bytes_written);
+        assert(!ob_decode(&is, &AllMsg_msg, &dst));
+    }
+
+    /* Bogus WireMap count > remaining bytes / 2 must be rejected */
+    {
+        uint8_t buf[16];
+        ob_ostream_t os = ob_ostream_from_buffer(buf, sizeof(buf));
+        assert(ob_write_tag(&os, 14u, OB_WIRE_MAP));
+        assert(ob_varint_encode(&os, 4u));
+        const uint8_t body[4] = {OB_WIRE_STRING, OB_WIRE_UINT, 0x05u, 0x01u}; /* count=2, 1 byte left */
+        assert(ob_write(&os, body, 4u));
+
+        AllMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(buf, os.bytes_written);
+        assert(!ob_decode(&is, &AllMsg_msg, &dst));
+    }
+
+    /* ob_write size_t wraparound and bytes_written > max_size must fail cleanly */
+    {
+        ob_ostream_t sizing = {NULL, NULL, 0u, SIZE_MAX - 2u, NULL};
+        assert(!ob_write(&sizing, NULL, 4u));
+        assert(sizing.errmsg != NULL);
+
+        uint8_t dummy[4];
+        ob_ostream_t bad = ob_ostream_from_buffer(dummy, 2u);
+        bad.bytes_written = 10u;
+        assert(!ob_write(&bad, dummy, 1u));
+        assert(bad.errmsg != NULL);
+    }
 }
 
 int main(void) {

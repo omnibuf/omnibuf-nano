@@ -22,7 +22,12 @@ bool ob_write(ob_ostream_t *stream, const uint8_t *buf, size_t count) {
     if (count == 0u) {
         return true;
     }
-    if (stream->max_size != 0u && (stream->max_size - stream->bytes_written) < count) {
+    if (count > (SIZE_MAX - stream->bytes_written)) {
+        OB_RETURN_ERROR(stream, "size overflow");
+    }
+    if (stream->max_size != 0u &&
+        (stream->bytes_written > stream->max_size ||
+         (stream->max_size - stream->bytes_written) < count)) {
         OB_RETURN_ERROR(stream, "stream full");
     }
     if (stream->callback == buf_write_callback) {
@@ -223,11 +228,11 @@ static size_t repeated_elem_stride(const ob_field_t *field) {
     return (size_t)field->data_size;
 }
 
-#define OB_ELEM_SIZE_CACHE_LEN 16u
+#define OB_ELEM_SIZE_CACHE_LEN 8u
 
 static bool encode_array_body(ob_ostream_t *stream, const ob_field_t *field,
                               const uint8_t *arr_ptr, uint16_t count,
-                              uint32_t *cached_sizes, size_t cache_cap,
+                              size_t *cached_sizes, size_t cache_cap,
                               unsigned int depth) {
     uint8_t elem_wt = field->wire_type;
     if (!ob_write(stream, &elem_wt, 1u)) {
@@ -252,7 +257,7 @@ static bool encode_array_body(ob_ostream_t *stream, const ob_field_t *field,
                 }
                 sub_len = sizing.bytes_written;
                 if (cached_sizes != NULL && i < cache_cap) {
-                    cached_sizes[i] = (uint32_t)sub_len;
+                    cached_sizes[i] = sub_len;
                 }
                 if (!ob_varint_encode(stream, (uint64_t)sub_len)) {
                     return false;
@@ -262,7 +267,7 @@ static bool encode_array_body(ob_ostream_t *stream, const ob_field_t *field,
                 }
             } else {
                 if (cached_sizes != NULL && i < cache_cap) {
-                    sub_len = (size_t)cached_sizes[i];
+                    sub_len = cached_sizes[i];
                 } else {
                     ob_ostream_t sizing = {NULL, NULL, 0u, 0u, NULL};
                     if (!encode_msg_depth(&sizing, field->submsg, elem_ptr, depth + 1u)) {
@@ -287,6 +292,43 @@ static bool encode_array_body(ob_ostream_t *stream, const ob_field_t *field,
         }
     }
     return true;
+}
+
+static bool encode_repeated_field(ob_ostream_t *stream, const ob_field_t *field,
+                                  const uint8_t *base, const uint8_t *data_ptr,
+                                  unsigned int depth) {
+    if (depth + 1u > OB_MAX_DEPTH) {
+        OB_RETURN_ERROR(stream, "max nesting depth exceeded");
+    }
+    uint16_t count = field->array_size;
+    if ((field->flags & OB_FLAG_FIXED_LEN) == 0u) {
+        memcpy(&count, base + field->size_offset, sizeof(count));
+    }
+    if (count == 0u) {
+        return true;
+    }
+    if (count > field->array_size) {
+        OB_RETURN_ERROR(stream, "array count exceeds max_count");
+    }
+    size_t cached_sizes[OB_ELEM_SIZE_CACHE_LEN];
+    size_t *cache_ptr = (field->wire_type == OB_WIRE_SUBMSG) ? cached_sizes : NULL;
+    ob_ostream_t sizing = {NULL, NULL, 0u, 0u, NULL};
+    if (!encode_array_body(&sizing, field, data_ptr, count,
+                           cache_ptr, OB_ELEM_SIZE_CACHE_LEN, depth + 1u)) {
+        stream->errmsg = sizing.errmsg;
+        return false;
+    }
+    if (!ob_write_tag(stream, field->tag, OB_WIRE_ARRAY)) {
+        return false;
+    }
+    if (!ob_varint_encode(stream, (uint64_t)sizing.bytes_written)) {
+        return false;
+    }
+    if (stream->callback == NULL) {
+        return ob_write(stream, NULL, sizing.bytes_written);
+    }
+    return encode_array_body(stream, field, data_ptr, count,
+                             cache_ptr, OB_ELEM_SIZE_CACHE_LEN, depth + 1u);
 }
 
 static bool encode_map_body(ob_ostream_t *stream, const ob_field_t *field,
@@ -396,38 +438,7 @@ static bool encode_field(ob_ostream_t *stream, const ob_field_t *field,
     }
 
     if ((field->flags & OB_FLAG_REPEATED) != 0u) {
-        if (depth + 1u > OB_MAX_DEPTH) {
-            OB_RETURN_ERROR(stream, "max nesting depth exceeded");
-        }
-        uint16_t count = field->array_size;
-        if ((field->flags & OB_FLAG_FIXED_LEN) == 0u) {
-            memcpy(&count, base + field->size_offset, sizeof(count));
-        }
-        if (count == 0u) {
-            return true;
-        }
-        if (count > field->array_size) {
-            OB_RETURN_ERROR(stream, "array count exceeds max_count");
-        }
-        uint32_t cached_sizes[OB_ELEM_SIZE_CACHE_LEN];
-        uint32_t *cache_ptr = (field->wire_type == OB_WIRE_SUBMSG) ? cached_sizes : NULL;
-        ob_ostream_t sizing = {NULL, NULL, 0u, 0u, NULL};
-        if (!encode_array_body(&sizing, field, data_ptr, count,
-                               cache_ptr, OB_ELEM_SIZE_CACHE_LEN, depth + 1u)) {
-            stream->errmsg = sizing.errmsg;
-            return false;
-        }
-        if (!ob_write_tag(stream, field->tag, OB_WIRE_ARRAY)) {
-            return false;
-        }
-        if (!ob_varint_encode(stream, (uint64_t)sizing.bytes_written)) {
-            return false;
-        }
-        if (stream->callback == NULL) {
-            return ob_write(stream, NULL, sizing.bytes_written);
-        }
-        return encode_array_body(stream, field, data_ptr, count,
-                                 cache_ptr, OB_ELEM_SIZE_CACHE_LEN, depth + 1u);
+        return encode_repeated_field(stream, field, base, data_ptr, depth);
     }
 
     /* Singular / Optional / Required / Oneof field */

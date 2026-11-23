@@ -277,6 +277,11 @@ static bool decode_payload(ob_istream_t *stream, const ob_field_t *field,
             return false;
         }
         dst[slen] = '\0';
+        for (size_t i = 0; i < (size_t)slen; i++) {
+            if (dst[i] == '\0') {
+                OB_RETURN_ERROR(stream, "embedded NUL in string");
+            }
+        }
         if (!ob_valid_utf8(dst, (size_t)slen)) {
             OB_RETURN_ERROR(stream, "invalid UTF-8 in string");
         }
@@ -349,6 +354,35 @@ static bool decode_array_field(ob_istream_t *stream, const ob_field_t *field,
         return false;
     }
 
+    /* Validate declared count against remaining payload bytes before touching dst_struct. */
+    {
+        size_t width = 0u;
+        switch (elem_wt) {
+        case OB_WIRE_BOOL_FALSE:
+            width = 1u;
+            break;
+        case OB_WIRE_FIXED32:
+        case OB_WIRE_SFIXED32:
+        case OB_WIRE_FLOAT32:
+            width = 4u;
+            break;
+        case OB_WIRE_FIXED64:
+        case OB_WIRE_SFIXED64:
+        case OB_WIRE_FLOAT64:
+            width = 8u;
+            break;
+        default:
+            break;
+        }
+        if (width > 0u) {
+            if ((sub.bytes_left % width) != 0u || count != (uint64_t)(sub.bytes_left / width)) {
+                OB_RETURN_ERROR(stream, "array count does not match body size");
+            }
+        } else if ((count == 0u && sub.bytes_left != 0u) || count > (uint64_t)sub.bytes_left) {
+            OB_RETURN_ERROR(stream, "array count exceeds body size");
+        }
+    }
+
     uint8_t *arr_ptr = base + field->data_offset;
     size_t stride = repeated_elem_stride(field);
 
@@ -369,7 +403,7 @@ static bool decode_array_field(ob_istream_t *stream, const ob_field_t *field,
     } else {
         uint16_t existing = 0;
         memcpy(&existing, base + field->size_offset, sizeof(existing));
-        if (count > (uint64_t)(field->array_size - existing)) {
+        if (existing > field->array_size || count > (uint64_t)(field->array_size - existing)) {
             OB_RETURN_ERROR(stream, "array count exceeds max_count");
         }
         for (uint64_t i = 0; i < count; i++) {
@@ -431,10 +465,13 @@ static bool decode_map_field(ob_istream_t *stream, const ob_field_t *field,
         stream->errmsg = sub.errmsg;
         return false;
     }
+    if ((count == 0u && sub.bytes_left != 0u) || count > (uint64_t)(sub.bytes_left / 2u)) {
+        OB_RETURN_ERROR(stream, "map count exceeds body size");
+    }
 
     uint16_t existing = 0;
     memcpy(&existing, base + field->size_offset, sizeof(existing));
-    if (count > (uint64_t)(field->array_size - existing)) {
+    if (existing > field->array_size || count > (uint64_t)(field->array_size - existing)) {
         OB_RETURN_ERROR(stream, "map count exceeds max_count");
     }
 

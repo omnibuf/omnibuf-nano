@@ -1,0 +1,9 @@
+# Shared static bounds used by both omnibuf-nano and nanopb.
+omnibuf.bench.Location.region max_size:32
+omnibuf.bench.Location.datacenter max_size:32
+omnibuf.bench.Location.city max_size:32
+omnibuf.bench.Neighbor.router max_size:48
+omnibuf.bench.PeerUpdate.router_id max_size:48
+omnibuf.bench.PeerUpdate.tags max_count:8 max_size:32
+omnibuf.bench.PeerUpdate.prefixes max_count:8
+omnibuf.bench.PeerUpdate.neighbors max_count:8

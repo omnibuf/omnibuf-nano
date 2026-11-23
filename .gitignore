@@ -1,0 +1,8 @@
+bin/
+*.o
+*.a
+*.out
+.DS_Store
+tests/c_unit/build/
+tests/conformance/build/
+benchmarks/build/

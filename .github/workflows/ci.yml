@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proto-lint:
+    name: Protobuf Lint & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: proto
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-action@v1
+      - run: buf lint
+      - run: buf build
+
+  c99-unit:
+    name: C99 Runtime (ASan/UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run C99 unit tests
+        run: |
+          mkdir -p tests/c_unit/build
+          gcc -Wall -Wextra -Werror -std=c99 -pedantic \
+            -fsanitize=address,undefined \
+            -Iruntime \
+            runtime/ob_varint.c \
+            runtime/ob_encode.c \
+            runtime/ob_decode.c \
+            tests/c_unit/test_runtime.c \
+            -o tests/c_unit/build/test_runtime
+          ./tests/c_unit/build/test_runtime
+
+  go-and-conformance:
+    name: Go Codegen & Cross-Language Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Run Go unit and conformance tests
+        run: go test -v ./...
+
+  arm-size:
+    name: ARM Cortex-M Cross-Compile & Size Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install arm-none-eabi-gcc
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+      - name: Cross-compile runtime for Cortex-M4 (-Os)
+        run: |
+          mkdir -p build/arm
+          for f in ob_varint ob_encode ob_decode; do
+            arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Os \
+              -Wall -Wextra -Werror -std=c99 -pedantic \
+              -Iruntime -c runtime/${f}.c -o build/arm/${f}.o
+          done
+          arm-none-eabi-size -t build/arm/*.o

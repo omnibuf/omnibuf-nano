@@ -1,0 +1,4 @@
+# Sidecar options for conformance.proto (takes precedence over proto annotations)
+ConformanceMsg.f_rep_string max_count:4 max_size:32
+ConformanceMsg.f_rep_bytes max_count:4 max_size:16
+ConformanceMsg.f_map_str_u64 max_count:4 max_size:24

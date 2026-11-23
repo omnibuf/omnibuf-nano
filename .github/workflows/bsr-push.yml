@@ -1,0 +1,36 @@
+name: Push Proto to BSR
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "proto/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bsr-push:
+    name: Lint, Breaking Check, and Push to BSR
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: proto
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Buf
+        uses: bufbuild/buf-action@v1
+        with:
+          token: ${{ secrets.BUF_TOKEN }}
+
+      - name: Lint proto
+        run: buf lint
+
+      - name: Check breaking changes against BSR
+        run: buf breaking --against "buf.build/omnibuf/nano"
+
+      - name: Push to BSR
+        run: buf push

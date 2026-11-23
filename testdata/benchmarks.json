@@ -1,0 +1,48 @@
+{
+  "language": "c99-nano",
+  "workload": "PeerUpdate",
+  "categories": [
+    {
+      "id": "encode",
+      "title": "Full Message Encode Speed",
+      "unit": "ns",
+      "results": [
+        {
+          "name": "OmniBuf Nano (C99)",
+          "nsPerOp": 1671.3,
+          "opsPerSec": 598336,
+          "wireBytes": 358,
+          "structBytes": 976,
+          "highlight": true,
+          "baseline": true
+        },
+        {
+          "name": "nanopb (C99)",
+          "nsPerOp": 1371.3,
+          "opsPerSec": 729222,
+          "wireBytes": 341,
+          "structBytes": 976
+        }
+      ]
+    },
+    {
+      "id": "decode",
+      "title": "Full Message Decode Speed",
+      "unit": "ns",
+      "results": [
+        {
+          "name": "OmniBuf Nano (C99)",
+          "nsPerOp": 904.4,
+          "opsPerSec": 1105707,
+          "highlight": true,
+          "baseline": true
+        },
+        {
+          "name": "nanopb (C99)",
+          "nsPerOp": 1164.3,
+          "opsPerSec": 858873
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package omnibuf.nano.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/omnibuf/omnibuf-nano/gen/omnibuf/nano/v1;nanov1";
+
+// FieldOptions configures static allocation bounds for a single Protobuf field
+// when generating C99 structs with protoc-gen-omnibuf-nano.
+message FieldOptions {
+  // Maximum byte capacity for string (including null terminator) and bytes fields.
+  uint32 max_size = 1;
+
+  // Maximum element count for repeated fields and map fields.
+  uint32 max_count = 2;
+
+  // Omit the explicit length or count member when a bytes or repeated field
+  // always holds its full configured capacity.
+  bool fixed_length = 3;
+}
+
+// MessageOptions configures code generation behavior for a Protobuf message.
+message MessageOptions {
+  // Skip generating C structs and descriptors for this message.
+  bool skip_message = 1;
+}
+
+// FileOptions sets default static bounds for all fields in a .proto file.
+message FileOptions {
+  // Default max_size applied to string and bytes fields without a field-level override.
+  uint32 default_max_size = 1;
+
+  // Default max_count applied to repeated and map fields without a field-level override.
+  uint32 default_max_count = 2;
+}
+
+extend google.protobuf.FieldOptions {
+  FieldOptions field = 51000;
+}
+
+extend google.protobuf.MessageOptions {
+  MessageOptions message = 51000;
+}
+
+extend google.protobuf.FileOptions {
+  FileOptions file = 51000;
+}

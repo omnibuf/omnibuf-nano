@@ -24,14 +24,20 @@ bool ob_read(ob_istream_t *stream, uint8_t *buf, size_t count) {
     if (stream->bytes_left < count) {
         OB_RETURN_ERROR(stream, "end-of-stream");
     }
-    if (stream->callback == NULL) {
-        OB_RETURN_ERROR(stream, "null read callback");
-    }
-    if (!stream->callback(stream, buf, count)) {
-        if (stream->errmsg == NULL) {
-            stream->errmsg = "read callback failed";
+    if (stream->callback == buf_read_callback) {
+        const uint8_t *src = (const uint8_t *)stream->state;
+        memcpy(buf, src, count);
+        stream->state = (void *)(src + count);
+    } else {
+        if (stream->callback == NULL) {
+            OB_RETURN_ERROR(stream, "null read callback");
         }
-        return false;
+        if (!stream->callback(stream, buf, count)) {
+            if (stream->errmsg == NULL) {
+                stream->errmsg = "read callback failed";
+            }
+            return false;
+        }
     }
     stream->bytes_left -= count;
     return true;

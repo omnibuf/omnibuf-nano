@@ -34,6 +34,10 @@ bool ob_varint_encode(ob_ostream_t *stream, uint64_t v) {
     uint8_t buf[9];
     size_t len;
 
+    if (stream->callback == NULL) {
+        return ob_write(stream, NULL, ob_varint_size(v));
+    }
+
     if (v <= 127u) {
         buf[0] = (uint8_t)((v << 1) | 1u);
         len = 1u;

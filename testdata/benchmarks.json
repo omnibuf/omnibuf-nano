@@ -9,8 +9,8 @@
       "results": [
         {
           "name": "OmniBuf Nano (C99)",
-          "nsPerOp": 1671.3,
-          "opsPerSec": 598336,
+          "nsPerOp": 1198.0,
+          "opsPerSec": 834746,
           "wireBytes": 358,
           "structBytes": 976,
           "highlight": true,
@@ -18,8 +18,8 @@
         },
         {
           "name": "nanopb (C99)",
-          "nsPerOp": 1371.3,
-          "opsPerSec": 729222,
+          "nsPerOp": 1349.4,
+          "opsPerSec": 741090,
           "wireBytes": 341,
           "structBytes": 976
         }
@@ -32,15 +32,15 @@
       "results": [
         {
           "name": "OmniBuf Nano (C99)",
-          "nsPerOp": 904.4,
-          "opsPerSec": 1105707,
+          "nsPerOp": 855.2,
+          "opsPerSec": 1169286,
           "highlight": true,
           "baseline": true
         },
         {
           "name": "nanopb (C99)",
-          "nsPerOp": 1164.3,
-          "opsPerSec": 858873
+          "nsPerOp": 1316.2,
+          "opsPerSec": 759742
         }
       ]
     }

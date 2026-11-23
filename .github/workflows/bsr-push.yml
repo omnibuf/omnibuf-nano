@@ -24,13 +24,19 @@ jobs:
       - name: Setup Buf
         uses: bufbuild/buf-action@v1
         with:
+          setup_only: true
           token: ${{ secrets.BUF_TOKEN }}
 
       - name: Lint proto
         run: buf lint
 
       - name: Check breaking changes against BSR
-        run: buf breaking --against "buf.build/omnibuf/nano"
+        run: |
+          if buf ls-files "buf.build/omnibuf/nano" >/dev/null 2>&1; then
+            buf breaking --against "buf.build/omnibuf/nano"
+          else
+            echo "BSR module buf.build/omnibuf/nano has no commits yet; skipping breaking check on initial push."
+          fi
 
       - name: Push to BSR
         run: buf push

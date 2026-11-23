@@ -27,14 +27,15 @@ jobs:
       - run: buf build
 
   c99-unit:
-    name: C99 Runtime (ASan/UBSan)
+    name: C99 Runtime (ASan/UBSan + Strict Flags)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build and run C99 unit tests
+      - name: Build and run C99 unit tests (ASan/UBSan)
         run: |
           mkdir -p tests/c_unit/build
           gcc -Wall -Wextra -Werror -std=c99 -pedantic \
+            -Wshadow -Wundef -Wcast-align -Wstrict-aliasing=2 -Wdouble-promotion \
             -fsanitize=address,undefined \
             -Iruntime \
             runtime/ob_varint.c \
@@ -43,6 +44,35 @@ jobs:
             tests/c_unit/test_runtime.c \
             -o tests/c_unit/build/test_runtime
           ./tests/c_unit/build/test_runtime
+
+      - name: Verify -fshort-enums compatibility
+        run: |
+          gcc -Wall -Wextra -Werror -std=c99 -pedantic -fshort-enums \
+            -fsanitize=address,undefined \
+            -Iruntime \
+            runtime/ob_varint.c \
+            runtime/ob_encode.c \
+            runtime/ob_decode.c \
+            tests/c_unit/test_runtime.c \
+            -o tests/c_unit/build/test_runtime_short_enums
+          ./tests/c_unit/build/test_runtime_short_enums
+
+      - name: Verify freestanding compile and zero heap/libc bloat
+        run: |
+          mkdir -p build/freestanding
+          for f in ob_varint ob_encode ob_decode; do
+            gcc -ffreestanding -Os -Wall -Wextra -Werror -std=c99 -pedantic \
+              -Wshadow -Wundef -Wcast-align -fstack-usage \
+              -Iruntime -c runtime/${f}.c -o build/freestanding/${f}.o
+          done
+          echo "=== Per-function stack usage ==="
+          cat build/freestanding/*.su
+          echo "=== Undefined external symbols ==="
+          nm -u build/freestanding/*.o
+          if nm -u build/freestanding/*.o | grep -E '\b(malloc|calloc|realloc|free|printf|fprintf|abort|exit)\b'; then
+            echo "ERROR: Forbidden hosted/heap symbol referenced in runtime!"
+            exit 1
+          fi
 
   go-and-conformance:
     name: Go Codegen & Cross-Language Conformance
@@ -57,19 +87,42 @@ jobs:
       - name: Run Go unit and conformance tests
         run: go test -v ./...
 
-  arm-size:
-    name: ARM Cortex-M Cross-Compile & Size Check
+  embedded-matrix:
+    name: Embedded Cross-Compile (ARM Cortex-M0/M4 & AVR 8-bit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install arm-none-eabi-gcc
-        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
-      - name: Cross-compile runtime for Cortex-M4 (-Os)
+      - name: Install embedded toolchains
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi gcc-avr avr-libc
+      - name: Cross-compile for ARM Cortex-M0 (-Os -fshort-enums)
         run: |
-          mkdir -p build/arm
+          mkdir -p build/arm-m0
           for f in ob_varint ob_encode ob_decode; do
-            arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Os \
-              -Wall -Wextra -Werror -std=c99 -pedantic \
-              -Iruntime -c runtime/${f}.c -o build/arm/${f}.o
+            arm-none-eabi-gcc -mcpu=cortex-m0 -mthumb -Os -ffreestanding -fshort-enums \
+              -Wall -Wextra -Werror -std=c99 -pedantic -fstack-usage \
+              -Iruntime -c runtime/${f}.c -o build/arm-m0/${f}.o
           done
-          arm-none-eabi-size -t build/arm/*.o
+          echo "=== ARM Cortex-M0 Size ==="
+          arm-none-eabi-size -t build/arm-m0/*.o
+      - name: Cross-compile for ARM Cortex-M4 (-Os)
+        run: |
+          mkdir -p build/arm-m4
+          for f in ob_varint ob_encode ob_decode; do
+            arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Os -ffreestanding \
+              -Wall -Wextra -Werror -std=c99 -pedantic -fstack-usage \
+              -Iruntime -c runtime/${f}.c -o build/arm-m4/${f}.o
+          done
+          echo "=== ARM Cortex-M4 Size ==="
+          arm-none-eabi-size -t build/arm-m4/*.o
+          echo "=== ARM Cortex-M4 Stack Usage ==="
+          cat build/arm-m4/*.su
+      - name: Cross-compile for 8-bit AVR ATmega328P (-Os, 16-bit int/size_t)
+        run: |
+          mkdir -p build/avr
+          for f in ob_varint ob_encode ob_decode; do
+            avr-gcc -mmcu=atmega328p -Os -ffreestanding \
+              -Wall -Wextra -Werror -std=c99 -pedantic \
+              -Iruntime -c runtime/${f}.c -o build/avr/${f}.o
+          done
+          echo "=== AVR ATmega328P Size ==="
+          avr-size build/avr/*.o

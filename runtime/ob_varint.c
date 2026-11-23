@@ -24,7 +24,7 @@ size_t ob_varint_size(uint64_t v) {
     if (v <= 16383u) {
         return 2u;
     }
-    if (v <= 536870911u) {
+    if (v <= 536870911UL) {
         return 4u;
     }
     return 9u;
@@ -46,7 +46,7 @@ bool ob_varint_encode(ob_ostream_t *stream, uint64_t v) {
         buf[0] = (uint8_t)(u & 0xFFu);
         buf[1] = (uint8_t)((u >> 8) & 0xFFu);
         len = 2u;
-    } else if (v <= 536870911u) {
+    } else if (v <= 536870911UL) {
         uint32_t u = (uint32_t)((v << 3) | 4u);
         buf[0] = (uint8_t)(u & 0xFFu);
         buf[1] = (uint8_t)((u >> 8) & 0xFFu);

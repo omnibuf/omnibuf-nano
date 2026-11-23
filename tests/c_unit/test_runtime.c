@@ -506,6 +506,23 @@ static void test_error_cases(void) {
         assert(!ob_write(&bad, dummy, 1u));
         assert(bad.errmsg != NULL);
     }
+
+    /* Wrong wire type on a REQUIRED field must not satisfy the required check */
+    {
+        typedef struct { int32_t req_id; } ReqMsg;
+        static const ob_field_t req_fields[] = {
+            {1u, OB_WIRE_SINT, OB_FLAG_REQUIRED, offsetof(ReqMsg, req_id), 0u, sizeof(int32_t), 1u, NULL}
+        };
+        static const ob_msgdesc_t req_desc = {req_fields, 1u, sizeof(ReqMsg)};
+
+        uint8_t buf[8];
+        ob_ostream_t os = ob_ostream_from_buffer(buf, sizeof(buf));
+        assert(ob_write_tag(&os, 1u, OB_WIRE_BOOL_TRUE)); /* wrong wire type for tag 1 */
+
+        ReqMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(buf, os.bytes_written);
+        assert(!ob_decode(&is, &req_desc, &dst));
+    }
 }
 
 int main(void) {

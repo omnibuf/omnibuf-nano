@@ -148,6 +148,9 @@ static bool encode_payload(ob_ostream_t *stream, const ob_field_t *field,
     case OB_WIRE_FIXED32:
     case OB_WIRE_SFIXED32:
     case OB_WIRE_FLOAT32: {
+        if (field->data_size != 4u) {
+            OB_RETURN_ERROR(stream, "invalid 32-bit field size");
+        }
         uint32_t bits = 0;
         memcpy(&bits, ptr, sizeof(bits));
         return write_le32(stream, bits);
@@ -156,6 +159,9 @@ static bool encode_payload(ob_ostream_t *stream, const ob_field_t *field,
     case OB_WIRE_FIXED64:
     case OB_WIRE_SFIXED64:
     case OB_WIRE_FLOAT64: {
+        if (field->data_size != 8u) {
+            OB_RETURN_ERROR(stream, "invalid 64-bit field size");
+        }
         uint64_t bits = 0;
         memcpy(&bits, ptr, sizeof(bits));
         return write_le64(stream, bits);

@@ -114,7 +114,15 @@ static bool ob_skip_value(ob_istream_t *stream, uint8_t wt) {
         if (!ob_varint_decode(stream, &blen)) {
             return false;
         }
-        if (blen > (uint64_t)stream->bytes_left) {
+        uint64_t min_len = 0u;
+        if (wt == OB_WIRE_ARRAY) {
+            min_len = 2u;
+        } else if (wt == OB_WIRE_MAP) {
+            min_len = 3u;
+        } else if (wt == OB_WIRE_EXTENDED) {
+            min_len = 1u;
+        }
+        if (blen < min_len || blen > (uint64_t)stream->bytes_left) {
             OB_RETURN_ERROR(stream, "length exceeds stream");
         }
         return ob_skip_bytes(stream, (size_t)blen);
@@ -242,6 +250,9 @@ static bool decode_payload(ob_istream_t *stream, const ob_field_t *field,
     case OB_WIRE_FIXED32:
     case OB_WIRE_SFIXED32:
     case OB_WIRE_FLOAT32: {
+        if (field->data_size != 4u) {
+            OB_RETURN_ERROR(stream, "invalid 32-bit field size");
+        }
         uint32_t bits = 0;
         if (!read_le32(stream, &bits)) {
             return false;
@@ -253,6 +264,9 @@ static bool decode_payload(ob_istream_t *stream, const ob_field_t *field,
     case OB_WIRE_FIXED64:
     case OB_WIRE_SFIXED64:
     case OB_WIRE_FLOAT64: {
+        if (field->data_size != 8u) {
+            OB_RETURN_ERROR(stream, "invalid 64-bit field size");
+        }
         uint64_t bits = 0;
         if (!read_le64(stream, &bits)) {
             return false;
@@ -559,10 +573,6 @@ static bool decode_msg_depth(ob_istream_t *stream, const ob_msgdesc_t *desc,
             continue;
         }
 
-        if (check_required && field_idx < 256u) {
-            seen_bits[field_idx / 8u] |= (uint8_t)(1u << (field_idx % 8u));
-        }
-
         if ((field->flags & OB_FLAG_MAP) != 0u) {
             if (wt != OB_WIRE_MAP) {
                 if (!ob_skip_value(stream, wt)) {
@@ -572,6 +582,9 @@ static bool decode_msg_depth(ob_istream_t *stream, const ob_msgdesc_t *desc,
             }
             if (!decode_map_field(stream, field, base, depth)) {
                 return false;
+            }
+            if (check_required && field_idx < 256u) {
+                seen_bits[field_idx / 8u] |= (uint8_t)(1u << (field_idx % 8u));
             }
             continue;
         }
@@ -585,6 +598,9 @@ static bool decode_msg_depth(ob_istream_t *stream, const ob_msgdesc_t *desc,
             }
             if (!decode_array_field(stream, field, base, depth)) {
                 return false;
+            }
+            if (check_required && field_idx < 256u) {
+                seen_bits[field_idx / 8u] |= (uint8_t)(1u << (field_idx % 8u));
             }
             continue;
         }
@@ -606,6 +622,9 @@ static bool decode_msg_depth(ob_istream_t *stream, const ob_msgdesc_t *desc,
                 memcpy(base + field->size_offset, &has_val, sizeof(has_val));
             }
             memcpy(base + field->data_offset, &bval, sizeof(bval));
+            if (check_required && field_idx < 256u) {
+                seen_bits[field_idx / 8u] |= (uint8_t)(1u << (field_idx % 8u));
+            }
             continue;
         }
 
@@ -639,6 +658,9 @@ static bool decode_msg_depth(ob_istream_t *stream, const ob_msgdesc_t *desc,
 
         if (!decode_payload(stream, field, dst_ptr, depth)) {
             return false;
+        }
+        if (check_required && field_idx < 256u) {
+            seen_bits[field_idx / 8u] |= (uint8_t)(1u << (field_idx % 8u));
         }
     }
 

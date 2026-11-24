@@ -44,10 +44,16 @@ bool ob_read(ob_istream_t *stream, uint8_t *buf, size_t count) {
 }
 
 static bool ob_skip_bytes(ob_istream_t *stream, size_t count) {
-    uint8_t scratch[32];
     if (stream->bytes_left < count) {
         OB_RETURN_ERROR(stream, "end-of-stream");
     }
+    if (stream->callback == buf_read_callback) {
+        const uint8_t *src = (const uint8_t *)stream->state;
+        stream->state = (void *)(src + count);
+        stream->bytes_left -= count;
+        return true;
+    }
+    uint8_t scratch[32];
     while (count > 0u) {
         size_t chunk = (count > sizeof(scratch)) ? sizeof(scratch) : count;
         if (!ob_read(stream, scratch, chunk)) {
@@ -207,8 +213,10 @@ static bool decode_payload(ob_istream_t *stream, const ob_field_t *field,
         } else if (field->data_size == 4u) {
             uint32_t v32 = (uint32_t)v;
             memcpy(ptr, &v32, sizeof(v32));
-        } else {
+        } else if (field->data_size == 8u) {
             memcpy(ptr, &v, sizeof(v));
+        } else {
+            OB_RETURN_ERROR(stream, "invalid integer field size");
         }
         return true;
     }
@@ -228,8 +236,10 @@ static bool decode_payload(ob_istream_t *stream, const ob_field_t *field,
         } else if (field->data_size == 4u) {
             int32_t v32 = (int32_t)v;
             memcpy(ptr, &v32, sizeof(v32));
-        } else {
+        } else if (field->data_size == 8u) {
             memcpy(ptr, &v, sizeof(v));
+        } else {
+            OB_RETURN_ERROR(stream, "invalid integer field size");
         }
         return true;
     }

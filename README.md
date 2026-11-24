@@ -6,8 +6,36 @@ Lightweight C99 OmniBuf serialization library and `protoc` plugin for embedded s
 
 - **Zero dynamic allocation:** No `malloc` or `free`. Generated C structs allocate fixed buffers from `max_size` and `max_count`.
 - **Descriptor-table driven:** A shared C99 encoder and decoder interpret `const ob_msgdesc_t` tables placed in `RODATA`.
-- **2-pass streaming I/O:** `ob_ostream_t` and `ob_istream_t` callbacks stream directly to or from UART, SPI, flash, or fixed buffers.
+- **Buffer and callback streaming I/O:** Buffer-backed streams (`ob_ostream_from_buffer`) encode containers in a single pass via length backpatching. Custom `ob_ostream_t` and `ob_istream_t` callbacks stream directly to or from UART, SPI, or flash.
 - **Native BSR options:** Protobuf bounds live in `omnibuf.nano.v1` (`buf.build/omnibuf/nano`) or sidecar `.options` files.
+
+## Usage
+
+```c
+#include "ob_decode.h"
+#include "ob_encode.h"
+#include "sensor.ob.h"
+
+uint8_t wire[128];
+sensor_Reading out = { .device_id = 42, .celsius_x100 = -525 };
+
+ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+if (!ob_encode(&os, &sensor_Reading_msg, &out)) {
+    /* inspect os.errmsg */
+}
+
+sensor_Reading in;
+ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+if (!ob_decode(&is, &sensor_Reading_msg, &in)) {
+    /* inspect is.errmsg */
+}
+```
+
+## Embedded Limitations
+
+- **Field number limit:** Known fields in `ob_field_t` use `uint16_t` tags (`1..65535`). Wire tags above `65535` are skipped as unknown fields.
+- **Strings:** C string fields are NUL-terminated fixed buffers (`char[max_size]`), so embedded `'\0'` bytes in `WireString` payloads are rejected on decode.
+- **Unknown fields and `Field #0`:** Unknown wire fields and inline `Field #0` (`SchemaMeta`) blocks are skipped by framing length without deep schema or UTF-8 validation.
 
 ## Layout
 

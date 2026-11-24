@@ -125,6 +125,56 @@ static size_t bounded_strlen(const char *s, size_t max_size) {
 static bool encode_msg_depth(ob_ostream_t *stream, const ob_msgdesc_t *desc,
                              const void *src_struct, unsigned int depth);
 
+static bool buf_begin_container(ob_ostream_t *stream, uint8_t **len_ptr_out, size_t *start_out) {
+    *len_ptr_out = (uint8_t *)stream->state;
+    *start_out = stream->bytes_written;
+    const uint8_t zeros[2] = {0u, 0u};
+    return ob_write(stream, zeros, 2u);
+}
+
+static bool buf_end_container(ob_ostream_t *stream, uint8_t *len_ptr, size_t start_written) {
+    size_t body_len = stream->bytes_written - (start_written + 2u);
+    if (body_len <= 16383u) {
+        uint16_t u = (uint16_t)(((uint16_t)body_len << 2) | 2u);
+        len_ptr[0] = (uint8_t)(u & 0xFFu);
+        len_ptr[1] = (uint8_t)((u >> 8) & 0xFFu);
+        return true;
+    }
+    if (body_len <= 536870911UL) {
+        if (stream->bytes_written > stream->max_size ||
+            (stream->max_size - stream->bytes_written) < 2u) {
+            OB_RETURN_ERROR(stream, "stream full");
+        }
+        memmove(len_ptr + 4u, len_ptr + 2u, body_len);
+        uint32_t u = (uint32_t)(((uint32_t)body_len << 3) | 4u);
+        len_ptr[0] = (uint8_t)(u & 0xFFu);
+        len_ptr[1] = (uint8_t)((u >> 8) & 0xFFu);
+        len_ptr[2] = (uint8_t)((u >> 16) & 0xFFu);
+        len_ptr[3] = (uint8_t)((u >> 24) & 0xFFu);
+        stream->state = (uint8_t *)stream->state + 2u;
+        stream->bytes_written += 2u;
+        return true;
+    }
+    if (stream->bytes_written > stream->max_size ||
+        (stream->max_size - stream->bytes_written) < 7u) {
+        OB_RETURN_ERROR(stream, "stream full");
+    }
+    memmove(len_ptr + 9u, len_ptr + 2u, body_len);
+    uint64_t v = (uint64_t)body_len;
+    len_ptr[0] = 0x00u;
+    len_ptr[1] = (uint8_t)(v & 0xFFu);
+    len_ptr[2] = (uint8_t)((v >> 8) & 0xFFu);
+    len_ptr[3] = (uint8_t)((v >> 16) & 0xFFu);
+    len_ptr[4] = (uint8_t)((v >> 24) & 0xFFu);
+    len_ptr[5] = (uint8_t)((v >> 32) & 0xFFu);
+    len_ptr[6] = (uint8_t)((v >> 40) & 0xFFu);
+    len_ptr[7] = (uint8_t)((v >> 48) & 0xFFu);
+    len_ptr[8] = (uint8_t)((v >> 56) & 0xFFu);
+    stream->state = (uint8_t *)stream->state + 7u;
+    stream->bytes_written += 7u;
+    return true;
+}
+
 /* Encode a single value payload (without field tag).
  * Used for singular fields (after tag), WireArray elements, and WireMap keys/values.
  * Note: For bool in container context, writes 1 byte (0 or 1). */
@@ -172,8 +222,7 @@ static bool encode_payload(ob_ostream_t *stream, const ob_field_t *field,
         if (slen == field->data_size) {
             OB_RETURN_ERROR(stream, "unterminated string");
         }
-        /* Validate UTF-8 once on the write pass; sizing pass only needs slen. */
-        if (stream->callback != NULL && !ob_valid_utf8((const uint8_t *)s, slen)) {
+        if (!ob_valid_utf8((const uint8_t *)s, slen)) {
             OB_RETURN_ERROR(stream, "invalid UTF-8 in string");
         }
         if (!ob_varint_encode(stream, (uint64_t)slen)) {
@@ -205,6 +254,17 @@ static bool encode_payload(ob_ostream_t *stream, const ob_field_t *field,
     case OB_WIRE_SUBMSG: {
         if (field->submsg == NULL) {
             OB_RETURN_ERROR(stream, "missing submsg descriptor");
+        }
+        if (stream->callback == buf_write_callback) {
+            uint8_t *len_ptr = NULL;
+            size_t start_written = 0u;
+            if (!buf_begin_container(stream, &len_ptr, &start_written)) {
+                return false;
+            }
+            if (!encode_msg_depth(stream, field->submsg, ptr, depth + 1u)) {
+                return false;
+            }
+            return buf_end_container(stream, len_ptr, start_written);
         }
         ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, 0u, NULL};
         if (!encode_msg_depth(&sizing, field->submsg, ptr, depth + 1u)) {
@@ -254,7 +314,19 @@ static bool encode_array_body(ob_ostream_t *stream, const ob_field_t *field,
         for (uint16_t i = 0; i < count; i++) {
             const uint8_t *elem_ptr = arr_ptr + ((size_t)i * stride);
             size_t sub_len = 0u;
-            if (stream->callback == NULL) {
+            if (stream->callback == buf_write_callback) {
+                uint8_t *len_ptr = NULL;
+                size_t start_written = 0u;
+                if (!buf_begin_container(stream, &len_ptr, &start_written)) {
+                    return false;
+                }
+                if (!encode_msg_depth(stream, field->submsg, elem_ptr, depth + 1u)) {
+                    return false;
+                }
+                if (!buf_end_container(stream, len_ptr, start_written)) {
+                    return false;
+                }
+            } else if (stream->callback == NULL) {
                 ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, 0u, NULL};
                 if (!encode_msg_depth(&sizing, field->submsg, elem_ptr, depth + 1u)) {
                     stream->errmsg = sizing.errmsg;
@@ -314,6 +386,20 @@ static bool encode_repeated_field(ob_ostream_t *stream, const ob_field_t *field,
     }
     if (count > field->array_size) {
         OB_RETURN_ERROR(stream, "array count exceeds max_count");
+    }
+    if (stream->callback == buf_write_callback) {
+        if (!ob_write_tag(stream, field->tag, OB_WIRE_ARRAY)) {
+            return false;
+        }
+        uint8_t *len_ptr = NULL;
+        size_t start_written = 0u;
+        if (!buf_begin_container(stream, &len_ptr, &start_written)) {
+            return false;
+        }
+        if (!encode_array_body(stream, field, data_ptr, count, NULL, 0u, depth + 1u)) {
+            return false;
+        }
+        return buf_end_container(stream, len_ptr, start_written);
     }
     size_t cached_sizes[OB_ELEM_SIZE_CACHE_LEN];
     size_t *cache_ptr = (field->wire_type == OB_WIRE_SUBMSG) ? cached_sizes : NULL;
@@ -424,6 +510,20 @@ static bool encode_field(ob_ostream_t *stream, const ob_field_t *field,
         }
         if (count > field->array_size) {
             OB_RETURN_ERROR(stream, "map count exceeds max_count");
+        }
+        if (stream->callback == buf_write_callback) {
+            if (!ob_write_tag(stream, field->tag, OB_WIRE_MAP)) {
+                return false;
+            }
+            uint8_t *len_ptr = NULL;
+            size_t start_written = 0u;
+            if (!buf_begin_container(stream, &len_ptr, &start_written)) {
+                return false;
+            }
+            if (!encode_map_body(stream, field, data_ptr, count, depth + 1u)) {
+                return false;
+            }
+            return buf_end_container(stream, len_ptr, start_written);
         }
         ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, 0u, NULL};
         if (!encode_map_body(&sizing, field, data_ptr, count, depth + 1u)) {

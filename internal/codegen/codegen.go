@@ -638,6 +638,7 @@ func includeGuard(path string) string {
 }
 
 var cKeywords = map[string]bool{
+	// C89 / C99 / C11 / C23 keywords
 	"auto": true, "break": true, "case": true, "char": true, "const": true,
 	"continue": true, "default": true, "do": true, "double": true, "else": true,
 	"enum": true, "extern": true, "float": true, "for": true, "goto": true,
@@ -645,6 +646,25 @@ var cKeywords = map[string]bool{
 	"restrict": true, "return": true, "short": true, "signed": true, "sizeof": true,
 	"static": true, "struct": true, "switch": true, "typedef": true, "union": true,
 	"unsigned": true, "void": true, "volatile": true, "while": true,
+	"bool": true, "true": true, "false": true, "nullptr": true,
+	"_Alignas": true, "_Alignof": true, "_Atomic": true, "_Bool": true,
+	"_Complex": true, "_Generic": true, "_Imaginary": true, "_Noreturn": true,
+	"_Static_assert": true, "_Thread_local": true,
+	// C++ keywords (headers are extern "C" compatible)
+	"alignas": true, "alignof": true, "and": true, "and_eq": true, "asm": true,
+	"bitand": true, "bitor": true, "catch": true, "char8_t": true, "char16_t": true,
+	"char32_t": true, "class": true, "compl": true, "concept": true,
+	"const_cast": true, "consteval": true, "constexpr": true, "constinit": true,
+	"co_await": true, "co_return": true, "co_yield": true, "decltype": true,
+	"delete": true, "dynamic_cast": true, "explicit": true, "export": true,
+	"friend": true, "mutable": true, "namespace": true, "new": true,
+	"noexcept": true, "not": true, "not_eq": true, "operator": true,
+	"or": true, "or_eq": true, "private": true, "protected": true,
+	"public": true, "reinterpret_cast": true, "requires": true,
+	"static_assert": true, "static_cast": true, "template": true, "this": true,
+	"thread_local": true, "throw": true, "try": true, "typeid": true,
+	"typename": true, "using": true, "virtual": true, "wchar_t": true,
+	"xor": true, "xor_eq": true,
 }
 
 func sanitizeIdent(name string) string {

@@ -140,7 +140,9 @@ static bool buf_end_container(ob_ostream_t *stream, uint8_t *len_ptr, size_t sta
         len_ptr[1] = (uint8_t)((u >> 8) & 0xFFu);
         return true;
     }
-    if ((uint64_t)body_len <= 536870911ULL) {
+#if SIZE_MAX > 536870911UL
+    if (body_len <= 536870911UL) {
+#endif
         if (stream->bytes_written > stream->max_size ||
             (stream->max_size - stream->bytes_written) < 2u) {
             OB_RETURN_ERROR(stream, "stream full");
@@ -154,6 +156,7 @@ static bool buf_end_container(ob_ostream_t *stream, uint8_t *len_ptr, size_t sta
         stream->state = (uint8_t *)stream->state + 2u;
         stream->bytes_written += 2u;
         return true;
+#if SIZE_MAX > 536870911UL
     }
     if (stream->bytes_written > stream->max_size ||
         (stream->max_size - stream->bytes_written) < 7u) {
@@ -173,6 +176,7 @@ static bool buf_end_container(ob_ostream_t *stream, uint8_t *len_ptr, size_t sta
     stream->state = (uint8_t *)stream->state + 7u;
     stream->bytes_written += 7u;
     return true;
+#endif
 }
 
 /* Encode a single value payload (without field tag).

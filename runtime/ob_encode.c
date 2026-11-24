@@ -140,7 +140,7 @@ static bool buf_end_container(ob_ostream_t *stream, uint8_t *len_ptr, size_t sta
         len_ptr[1] = (uint8_t)((u >> 8) & 0xFFu);
         return true;
     }
-    if (body_len <= 536870911UL) {
+    if ((uint64_t)body_len <= 536870911ULL) {
         if (stream->bytes_written > stream->max_size ||
             (stream->max_size - stream->bytes_written) < 2u) {
             OB_RETURN_ERROR(stream, "stream full");

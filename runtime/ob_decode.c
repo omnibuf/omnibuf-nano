@@ -497,8 +497,66 @@ static void zero_field_value(const ob_field_t *field, void *ptr) {
     }
 }
 
+/* Incremental UTF-8 validator state for chunked string decoding. */
+typedef struct {
+    uint8_t rem;
+    uint8_t min_cont;
+    uint8_t max_cont;
+} ob_utf8_stream_t;
+
+static bool ob_utf8_stream_feed(ob_utf8_stream_t *st, const uint8_t *buf, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        uint8_t b = buf[i];
+        if (st->rem > 0u) {
+            if (b < st->min_cont || b > st->max_cont) {
+                return false;
+            }
+            st->rem--;
+            st->min_cont = 0x80u;
+            st->max_cont = 0xBFu;
+        } else if (b < 0x80u) {
+            continue;
+        } else if (b >= 0xC2u && b <= 0xDFu) {
+            st->rem = 1u;
+            st->min_cont = 0x80u;
+            st->max_cont = 0xBFu;
+        } else if (b == 0xE0u) {
+            st->rem = 2u;
+            st->min_cont = 0xA0u;
+            st->max_cont = 0xBFu;
+        } else if ((b >= 0xE1u && b <= 0xECu) || (b >= 0xEEu && b <= 0xEFu)) {
+            st->rem = 2u;
+            st->min_cont = 0x80u;
+            st->max_cont = 0xBFu;
+        } else if (b == 0xEDu) {
+            st->rem = 2u;
+            st->min_cont = 0x80u;
+            st->max_cont = 0x9Fu;
+        } else if (b == 0xF0u) {
+            st->rem = 3u;
+            st->min_cont = 0x90u;
+            st->max_cont = 0xBFu;
+        } else if (b >= 0xF1u && b <= 0xF3u) {
+            st->rem = 3u;
+            st->min_cont = 0x80u;
+            st->max_cont = 0xBFu;
+        } else if (b == 0xF4u) {
+            st->rem = 3u;
+            st->min_cont = 0x80u;
+            st->max_cont = 0x8Fu;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Decode a map key from sub when the map array is already at max_count, and
- * check whether it matches an existing entry in [0, cur_count). */
+ * check whether it matches an existing entry in [0, cur_count).
+ *
+ * String keys < 256 bytes use a single stack buffer for direct strcmp; keys
+ * >= 256 bytes stream in 64-byte chunks to keep stack usage bounded on embedded
+ * targets. Both paths enforce identical embedded-NUL and UTF-8 validation. */
 static bool find_existing_map_key(ob_istream_t *sub, const ob_field_t *kfield,
                                   const uint8_t *arr_ptr, uint16_t cur_count,
                                   size_t stride, unsigned int depth,
@@ -553,12 +611,21 @@ static bool find_existing_map_key(ob_istream_t *sub, const ob_field_t *kfield,
             }
         }
         uint8_t chunk[64];
+        ob_utf8_stream_t utf8 = {0u, 0x80u, 0xBFu};
         size_t off = 0u;
         while (off < (size_t)slen) {
             size_t rem = (size_t)slen - off;
             size_t take = (rem > sizeof(chunk)) ? sizeof(chunk) : rem;
             if (!ob_read(sub, chunk, take)) {
                 return false;
+            }
+            for (size_t k = 0; k < take; k++) {
+                if (chunk[k] == 0u) {
+                    OB_RETURN_ERROR(sub, "embedded NUL in string");
+                }
+            }
+            if (!ob_utf8_stream_feed(&utf8, chunk, take)) {
+                OB_RETURN_ERROR(sub, "invalid UTF-8 in string");
             }
             for (uint16_t j = 0; j < limit; j++) {
                 if ((cand_bits[j / 8u] & (uint8_t)(1u << (j % 8u))) != 0u) {
@@ -569,6 +636,9 @@ static bool find_existing_map_key(ob_istream_t *sub, const ob_field_t *kfield,
                 }
             }
             off += take;
+        }
+        if (utf8.rem != 0u) {
+            OB_RETURN_ERROR(sub, "invalid UTF-8 in string");
         }
         for (uint16_t j = 0; j < limit; j++) {
             if ((cand_bits[j / 8u] & (uint8_t)(1u << (j % 8u))) != 0u) {
@@ -834,14 +904,7 @@ static bool decode_msg_depth(ob_istream_t *stream, const ob_msgdesc_t *desc,
             uint16_t prev_which = 0;
             memcpy(&prev_which, base + field->size_offset, sizeof(prev_which));
             if (prev_which != field->tag) {
-                if (field->wire_type == OB_WIRE_SUBMSG) {
-                    memset(dst_ptr, 0, field->data_size);
-                } else if (field->wire_type == OB_WIRE_BYTES &&
-                           (field->flags & OB_FLAG_FIXED_LEN) == 0u) {
-                    memset(dst_ptr, 0, OB_BYTES_STRIDE(field->data_size));
-                } else {
-                    memset(dst_ptr, 0, field->data_size);
-                }
+                zero_field_value(field, dst_ptr);
             }
             uint16_t tag16 = field->tag;
             memcpy(base + field->size_offset, &tag16, sizeof(tag16));

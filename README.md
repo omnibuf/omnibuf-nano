@@ -1,15 +1,18 @@
 # omnibuf-nano
 
-Lightweight C99 OmniBuf serialization library and `protoc` plugin for embedded systems.
+[![OmniBuf Spec: v1 DRAFT-1](https://img.shields.io/badge/OmniBuf%20Spec-v1%20DRAFT--1-FF4F18)](https://omnibuf.com/spec)
 
-## Design
+Zero-malloc C99 runtime and `protoc-gen-omnibuf-nano` code generator for embedded [OmniBuf Wire Specification v1 DRAFT-1](https://omnibuf.com/spec) targets. Full docs live at [omnibuf.com/nano](https://omnibuf.com/nano).
 
-- **Zero dynamic allocation:** No `malloc` or `free`. Generated C structs allocate fixed buffers from `max_size` and `max_count`.
-- **Descriptor-table driven:** A shared C99 encoder and decoder interpret `const ob_msgdesc_t` tables placed in `RODATA`.
-- **Buffer and callback streaming I/O:** Buffer-backed streams (`ob_ostream_from_buffer`) encode containers in a single pass via length backpatching. Custom `ob_ostream_t` and `ob_istream_t` callbacks stream directly to or from UART, SPI, or flash.
-- **Native BSR options:** Protobuf bounds live in `omnibuf.nano.v1` (`buf.build/omnibuf/nano`) or sidecar `.options` files.
+## Install
 
-## Usage
+```bash
+go install github.com/omnibuf/omnibuf-nano/cmd/protoc-gen-omnibuf-nano@latest
+```
+
+Compile `runtime/ob_varint.c`, `runtime/ob_encode.c`, and `runtime/ob_decode.c` with `-Iruntime -std=c99` alongside generated `.ob.h` and `.ob.c` files.
+
+## Quick usage
 
 ```c
 #include "ob_decode.h"
@@ -31,31 +34,15 @@ if (!ob_decode(&is, &sensor_Reading_msg, &in)) {
 }
 ```
 
-## Embedded Limitations
+## Implementation
 
-- **Field number limit:** Known fields in `ob_field_t` use `uint16_t` tags (`1..65535`). Wire tags above `65535` are skipped as unknown fields.
-- **Strings:** C string fields are NUL-terminated fixed buffers (`char[max_size]`), so embedded `'\0'` bytes in `WireString` payloads are rejected on decode.
-- **Unknown fields and `Field #0`:** Unknown wire fields and inline `Field #0` (`SchemaMeta`) blocks are skipped by framing length without deep schema or UTF-8 validation.
+- **Zero dynamic allocation:** No `malloc` or `free`. Generated C structs size fixed buffers from `max_size` and `max_count` options.
+- **Descriptor tables in `RODATA`:** A shared C99 encoder and decoder interpret generated `const ob_msgdesc_t` tables.
+- **Buffer and callback streams:** `ob_ostream_from_buffer` encodes containers in a single pass via length backpatching. Custom `ob_ostream_t` and `ob_istream_t` callbacks stream directly over UART, SPI, or flash.
+- **Nanopb-style bounds:** Size limits live in `omnibuf.nano.v1` (`buf.build/omnibuf/nano`) Protobuf options or sidecar `.options` files with glob matching.
+- **Embedded limits:** Known `ob_field_t` tags are `uint16_t` (`1..65535`); tags above `65535` are skipped as unknown. C strings are NUL-terminated fixed arrays (`char[max_size]`), so embedded `'\0'` bytes in wire strings fail decode. Unknown fields and `Field #0` blocks are skipped by framing length.
+- **Verification:** Run C unit tests with ASan/UBSan (`tests/c_unit/`) and Go codegen/roundtrip tests via `go test -v ./...`.
 
-## Layout
+## License
 
-- `proto/omnibuf/nano/v1/options.proto`: Native field, message, and file options.
-- `runtime/`: Zero-dependency C99 library (`ob_common.h`, `ob_varint.c`, `ob_encode.c`, `ob_decode.c`).
-- `cmd/protoc-gen-omnibuf-nano/`: Go `protoplugin` code generator emitting `.ob.h` and `.ob.c`.
-- `internal/options/`: Sidecar `.options` parser and glob resolver.
-- `internal/codegen/`: C header and descriptor table generator.
-- `tests/c_unit/`: C99 runtime unit tests (ASan/UBSan).
-- `tests/conformance/`: Cross-language Go OmniBuf to C99 Nano OmniBuf roundtrip suite.
-
-## Quick Verification
-
-```sh
-# C99 runtime unit tests
-cc -Wall -Wextra -Werror -std=c99 -pedantic -fsanitize=address,undefined \
-  -Iruntime runtime/ob_varint.c runtime/ob_encode.c runtime/ob_decode.c \
-  tests/c_unit/test_runtime.c -o tests/c_unit/build/test_runtime
-./tests/c_unit/build/test_runtime
-
-# Go options, codegen, and cross-language conformance tests
-go test -v ./...
-```
+Apache-2.0

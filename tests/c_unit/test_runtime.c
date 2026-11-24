@@ -706,6 +706,104 @@ static void test_map_duplicate_keys(void) {
         assert(dst.m[0].key == -5 && dst.m[0].value == 33u);
         assert(dst.m[1].key == 7 && dst.m[1].value == 22u);
     }
+
+    /* 5. Large (>= 256 byte) string map key at max_count=1:
+     *    - duplicate valid UTF-8 key (multi-byte char straddling 64-byte boundary) updates in place
+     *    - invalid UTF-8 and embedded NUL are rejected consistently with the < 256 path */
+    {
+        typedef struct {
+            char key[300];
+            uint32_t value;
+        } BigKeyEntry;
+        static const ob_field_t bke_fields[] = {
+            {1u, OB_WIRE_STRING, OB_FLAG_SINGULAR, offsetof(BigKeyEntry, key),   0u, 300u,             1u, NULL},
+            {2u, OB_WIRE_UINT,   OB_FLAG_SINGULAR, offsetof(BigKeyEntry, value), 0u, sizeof(uint32_t), 1u, NULL}
+        };
+        static const ob_msgdesc_t bke_desc = {bke_fields, 2u, sizeof(BigKeyEntry)};
+
+        typedef struct {
+            uint16_t m_count;
+            BigKeyEntry m[1];
+        } BigKeyMsg;
+        static const ob_field_t bkm_fields[] = {
+            {1u, OB_WIRE_MAP, OB_FLAG_MAP, offsetof(BigKeyMsg, m), offsetof(BigKeyMsg, m_count), sizeof(BigKeyEntry), 1u, &bke_desc}
+        };
+        static const ob_msgdesc_t bkm_desc = {bkm_fields, 1u, sizeof(BigKeyMsg)};
+
+        /* 260-byte valid UTF-8 key with a 3-byte UTF-8 sequence straddling offset 64 (bytes 63..65). */
+        uint8_t valid_key[260];
+        memset(valid_key, 'a', sizeof(valid_key));
+        valid_key[63] = 0xE2u;
+        valid_key[64] = 0x82u;
+        valid_key[65] = 0xACu; /* U+20AC EURO SIGN */
+
+        uint8_t body[700];
+        ob_ostream_t bs = ob_ostream_from_buffer(body, sizeof(body));
+        const uint8_t hdr[2] = {OB_WIRE_STRING, OB_WIRE_UINT};
+        assert(ob_write(&bs, hdr, 2u));
+        assert(ob_varint_encode(&bs, 2u));
+        assert(ob_varint_encode(&bs, sizeof(valid_key)));
+        assert(ob_write(&bs, valid_key, sizeof(valid_key)));
+        assert(ob_varint_encode(&bs, 10u));
+        assert(ob_varint_encode(&bs, sizeof(valid_key)));
+        assert(ob_write(&bs, valid_key, sizeof(valid_key)));
+        assert(ob_varint_encode(&bs, 99u));
+
+        uint8_t wire[768];
+        ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_write_tag(&os, 1u, OB_WIRE_MAP));
+        assert(ob_varint_encode(&os, (uint64_t)bs.bytes_written));
+        assert(ob_write(&os, body, bs.bytes_written));
+
+        BigKeyMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(ob_decode(&is, &bkm_desc, &dst));
+        assert(dst.m_count == 1u);
+        assert(dst.m[0].value == 99u);
+        assert(memcmp(dst.m[0].key, valid_key, sizeof(valid_key)) == 0);
+
+        /* Second entry >= 256 bytes with invalid UTF-8 must fail with UTF-8 error */
+        uint8_t bad_utf8[260];
+        memcpy(bad_utf8, valid_key, sizeof(bad_utf8));
+        bad_utf8[200] = 0xFFu;
+        bs = ob_ostream_from_buffer(body, sizeof(body));
+        assert(ob_write(&bs, hdr, 2u));
+        assert(ob_varint_encode(&bs, 2u));
+        assert(ob_varint_encode(&bs, sizeof(valid_key)));
+        assert(ob_write(&bs, valid_key, sizeof(valid_key)));
+        assert(ob_varint_encode(&bs, 10u));
+        assert(ob_varint_encode(&bs, sizeof(bad_utf8)));
+        assert(ob_write(&bs, bad_utf8, sizeof(bad_utf8)));
+        assert(ob_varint_encode(&bs, 20u));
+        os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_write_tag(&os, 1u, OB_WIRE_MAP));
+        assert(ob_varint_encode(&os, (uint64_t)bs.bytes_written));
+        assert(ob_write(&os, body, bs.bytes_written));
+        is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(!ob_decode(&is, &bkm_desc, &dst));
+        assert(is.errmsg != NULL && strcmp(is.errmsg, "invalid UTF-8 in string") == 0);
+
+        /* Second entry >= 256 bytes with embedded NUL must fail with NUL error */
+        uint8_t bad_nul[260];
+        memcpy(bad_nul, valid_key, sizeof(bad_nul));
+        bad_nul[150] = '\0';
+        bs = ob_ostream_from_buffer(body, sizeof(body));
+        assert(ob_write(&bs, hdr, 2u));
+        assert(ob_varint_encode(&bs, 2u));
+        assert(ob_varint_encode(&bs, sizeof(valid_key)));
+        assert(ob_write(&bs, valid_key, sizeof(valid_key)));
+        assert(ob_varint_encode(&bs, 10u));
+        assert(ob_varint_encode(&bs, sizeof(bad_nul)));
+        assert(ob_write(&bs, bad_nul, sizeof(bad_nul)));
+        assert(ob_varint_encode(&bs, 20u));
+        os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_write_tag(&os, 1u, OB_WIRE_MAP));
+        assert(ob_varint_encode(&os, (uint64_t)bs.bytes_written));
+        assert(ob_write(&os, body, bs.bytes_written));
+        is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(!ob_decode(&is, &bkm_desc, &dst));
+        assert(is.errmsg != NULL && strcmp(is.errmsg, "embedded NUL in string") == 0);
+    }
 }
 
 int main(void) {

@@ -281,6 +281,12 @@ func (g *fileGenerator) buildMessage(md protoreflect.MessageDescriptor, mapParen
 		return 0
 	})
 
+	for i, rf := range rm.fields {
+		if i >= 256 && slices.Contains(rf.flags, "OB_FLAG_REQUIRED") {
+			return nil, fmt.Errorf("%s: required field at descriptor index %d exceeds runtime limit (255)", rf.desc.FullName(), i)
+		}
+	}
+
 	return rm, nil
 }
 
@@ -356,10 +362,11 @@ func (g *fileGenerator) renderHeader(headerPath string) (string, error) {
 
 	fmt.Fprintf(&b, "\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n")
 
-	// Enums
+	// Enums (backed by int32_t so -fshort-enums cannot narrow them to unsigned 1/2-byte types)
 	for _, ed := range g.enums {
 		eName := cTypeName(ed.FullName())
-		fmt.Fprintf(&b, "typedef enum {\n")
+		fmt.Fprintf(&b, "typedef int32_t %s;\n", eName)
+		fmt.Fprintf(&b, "enum {\n")
 		vals := ed.Values()
 		for i := 0; i < vals.Len(); i++ {
 			ev := vals.Get(i)
@@ -369,7 +376,7 @@ func (g *fileGenerator) renderHeader(headerPath string) (string, error) {
 			}
 			fmt.Fprintf(&b, "    %s_%s = %d%s\n", eName, ev.Name(), ev.Number(), comma)
 		}
-		fmt.Fprintf(&b, "} %s;\n\n", eName)
+		fmt.Fprintf(&b, "};\n\n")
 	}
 
 	// Message structs

@@ -496,7 +496,7 @@ static void test_error_cases(void) {
 
     /* ob_write size_t wraparound and bytes_written > max_size must fail cleanly */
     {
-        ob_ostream_t sizing = {NULL, NULL, 0u, SIZE_MAX - 2u, NULL};
+        ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, SIZE_MAX - 2u, NULL};
         assert(!ob_write(&sizing, NULL, 4u));
         assert(sizing.errmsg != NULL);
 
@@ -505,6 +505,24 @@ static void test_error_cases(void) {
         bad.bytes_written = 10u;
         assert(!ob_write(&bad, dummy, 1u));
         assert(bad.errmsg != NULL);
+    }
+
+    /* ob_ostream_from_buffer(buf, 0) must fail with stream full, never overflow */
+    {
+        uint8_t canary[4] = {0xDEu, 0xADu, 0xBEu, 0xEFu};
+        SubMsg src = {42, "hello"};
+        ob_ostream_t os = ob_ostream_from_buffer(canary, 0u);
+        assert(!ob_encode(&os, &SubMsg_msg, &src));
+        assert(os.errmsg != NULL);
+        assert(os.bytes_written == 0u);
+        assert(canary[0] == 0xDEu && canary[1] == 0xADu &&
+               canary[2] == 0xBEu && canary[3] == 0xEFu);
+
+        /* Empty message encodes 0 bytes and succeeds even into a 0-byte buffer */
+        SubMsg empty = {0, ""};
+        ob_ostream_t os_empty = ob_ostream_from_buffer(NULL, 0u);
+        assert(ob_encode(&os_empty, &SubMsg_msg, &empty));
+        assert(os_empty.bytes_written == 0u);
     }
 
     /* Wrong wire type on a REQUIRED field must not satisfy the required check */
@@ -523,6 +541,171 @@ static void test_error_cases(void) {
         ob_istream_t is = ob_istream_from_buffer(buf, os.bytes_written);
         assert(!ob_decode(&is, &req_desc, &dst));
     }
+
+    /* Required field at descriptor index >= 256 must be rejected instead of skipped */
+    {
+        typedef struct { int32_t v; } BigMsg;
+        ob_field_t fields[257];
+        for (uint16_t i = 0u; i < 257u; i++) {
+            fields[i].tag = (uint16_t)(i + 1u);
+            fields[i].wire_type = OB_WIRE_SINT;
+            fields[i].flags = (i == 256u) ? OB_FLAG_REQUIRED : OB_FLAG_SINGULAR;
+            fields[i].data_offset = 0u;
+            fields[i].size_offset = 0u;
+            fields[i].data_size = sizeof(int32_t);
+            fields[i].array_size = 1u;
+            fields[i].submsg = NULL;
+        }
+        ob_msgdesc_t big_desc = {fields, 257u, sizeof(BigMsg)};
+        BigMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(NULL, 0u);
+        assert(!ob_decode(&is, &big_desc, &dst));
+        assert(is.errmsg != NULL);
+    }
+}
+
+static void write_str_u64_map_entry(ob_ostream_t *os, const char *k, uint64_t v) {
+    size_t klen = strlen(k);
+    assert(ob_varint_encode(os, (uint64_t)klen));
+    assert(ob_write(os, (const uint8_t *)k, klen));
+    assert(ob_varint_encode(os, v));
+}
+
+static void test_map_duplicate_keys(void) {
+    /* 1. Duplicate key when map is below max_count: overwrites in place, count stays 1 */
+    {
+        uint8_t body[64];
+        ob_ostream_t bs = ob_ostream_from_buffer(body, sizeof(body));
+        const uint8_t hdr[2] = {OB_WIRE_STRING, OB_WIRE_UINT};
+        assert(ob_write(&bs, hdr, 2u));
+        assert(ob_varint_encode(&bs, 2u));
+        write_str_u64_map_entry(&bs, "dup", 10u);
+        write_str_u64_map_entry(&bs, "dup", 99u);
+
+        uint8_t wire[128];
+        ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_write_tag(&os, 14u, OB_WIRE_MAP));
+        assert(ob_varint_encode(&os, (uint64_t)bs.bytes_written));
+        assert(ob_write(&os, body, bs.bytes_written));
+
+        AllMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(ob_decode(&is, &AllMsg_msg, &dst));
+        assert(dst.kv_count == 1u);
+        assert(strcmp(dst.kv[0].key, "dup") == 0);
+        assert(dst.kv[0].value == 99u);
+    }
+
+    /* 2. 5 wire entries with 4 distinct keys into max_count=4 map: last-write-wins without overflow */
+    {
+        uint8_t body[128];
+        ob_ostream_t bs = ob_ostream_from_buffer(body, sizeof(body));
+        const uint8_t hdr[2] = {OB_WIRE_STRING, OB_WIRE_UINT};
+        assert(ob_write(&bs, hdr, 2u));
+        assert(ob_varint_encode(&bs, 5u));
+        write_str_u64_map_entry(&bs, "k1", 1u);
+        write_str_u64_map_entry(&bs, "k2", 2u);
+        write_str_u64_map_entry(&bs, "k3", 3u);
+        write_str_u64_map_entry(&bs, "k4", 4u);
+        write_str_u64_map_entry(&bs, "k2", 200u);
+
+        uint8_t wire[256];
+        ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_write_tag(&os, 14u, OB_WIRE_MAP));
+        assert(ob_varint_encode(&os, (uint64_t)bs.bytes_written));
+        assert(ob_write(&os, body, bs.bytes_written));
+
+        /* Also append a second WireMap updating "k4" when already at max_count */
+        uint8_t body2[64];
+        ob_ostream_t bs2 = ob_ostream_from_buffer(body2, sizeof(body2));
+        assert(ob_write(&bs2, hdr, 2u));
+        assert(ob_varint_encode(&bs2, 1u));
+        write_str_u64_map_entry(&bs2, "k4", 400u);
+        assert(ob_write_tag(&os, 14u, OB_WIRE_MAP));
+        assert(ob_varint_encode(&os, (uint64_t)bs2.bytes_written));
+        assert(ob_write(&os, body2, bs2.bytes_written));
+
+        AllMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(ob_decode(&is, &AllMsg_msg, &dst));
+        assert(dst.kv_count == 4u);
+        assert(strcmp(dst.kv[0].key, "k1") == 0 && dst.kv[0].value == 1u);
+        assert(strcmp(dst.kv[1].key, "k2") == 0 && dst.kv[1].value == 200u);
+        assert(strcmp(dst.kv[2].key, "k3") == 0 && dst.kv[2].value == 3u);
+        assert(strcmp(dst.kv[3].key, "k4") == 0 && dst.kv[3].value == 400u);
+    }
+
+    /* 3. 5 distinct keys into max_count=4 map must still fail */
+    {
+        uint8_t body[128];
+        ob_ostream_t bs = ob_ostream_from_buffer(body, sizeof(body));
+        const uint8_t hdr[2] = {OB_WIRE_STRING, OB_WIRE_UINT};
+        assert(ob_write(&bs, hdr, 2u));
+        assert(ob_varint_encode(&bs, 5u));
+        write_str_u64_map_entry(&bs, "k1", 1u);
+        write_str_u64_map_entry(&bs, "k2", 2u);
+        write_str_u64_map_entry(&bs, "k3", 3u);
+        write_str_u64_map_entry(&bs, "k4", 4u);
+        write_str_u64_map_entry(&bs, "k5", 5u);
+
+        uint8_t wire[256];
+        ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_write_tag(&os, 14u, OB_WIRE_MAP));
+        assert(ob_varint_encode(&os, (uint64_t)bs.bytes_written));
+        assert(ob_write(&os, body, bs.bytes_written));
+
+        AllMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(!ob_decode(&is, &AllMsg_msg, &dst));
+        assert(is.errmsg != NULL);
+    }
+
+    /* 4. Duplicate integer keys at max_count=2 */
+    {
+        typedef struct {
+            int32_t key;
+            uint32_t value;
+        } IntMapEntry;
+        static const ob_field_t ime_fields[] = {
+            {1u, OB_WIRE_SINT, OB_FLAG_SINGULAR, offsetof(IntMapEntry, key),   0u, sizeof(int32_t),  1u, NULL},
+            {2u, OB_WIRE_UINT, OB_FLAG_SINGULAR, offsetof(IntMapEntry, value), 0u, sizeof(uint32_t), 1u, NULL}
+        };
+        static const ob_msgdesc_t ime_desc = {ime_fields, 2u, sizeof(IntMapEntry)};
+
+        typedef struct {
+            uint16_t m_count;
+            IntMapEntry m[2];
+        } IntMapMsg;
+        static const ob_field_t imm_fields[] = {
+            {1u, OB_WIRE_MAP, OB_FLAG_MAP, offsetof(IntMapMsg, m), offsetof(IntMapMsg, m_count), sizeof(IntMapEntry), 2u, &ime_desc}
+        };
+        static const ob_msgdesc_t imm_desc = {imm_fields, 1u, sizeof(IntMapMsg)};
+
+        uint8_t body[64];
+        ob_ostream_t bs = ob_ostream_from_buffer(body, sizeof(body));
+        const uint8_t hdr[2] = {OB_WIRE_SINT, OB_WIRE_UINT};
+        assert(ob_write(&bs, hdr, 2u));
+        assert(ob_varint_encode(&bs, 3u));
+        assert(ob_varint_encode(&bs, ob_zigzag_encode(-5)));
+        assert(ob_varint_encode(&bs, 11u));
+        assert(ob_varint_encode(&bs, ob_zigzag_encode(7)));
+        assert(ob_varint_encode(&bs, 22u));
+        assert(ob_varint_encode(&bs, ob_zigzag_encode(-5)));
+        assert(ob_varint_encode(&bs, 33u));
+
+        uint8_t wire[128];
+        ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_write_tag(&os, 1u, OB_WIRE_MAP));
+        assert(ob_varint_encode(&os, (uint64_t)bs.bytes_written));
+        assert(ob_write(&os, body, bs.bytes_written));
+
+        IntMapMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(ob_decode(&is, &imm_desc, &dst));
+        assert(dst.m_count == 2u);
+        assert(dst.m[0].key == -5 && dst.m[0].value == 33u);
+        assert(dst.m[1].key == 7 && dst.m[1].value == 22u);
+    }
 }
 
 int main(void) {
@@ -532,6 +715,7 @@ int main(void) {
     test_full_roundtrip();
     test_skip_field0_and_unknowns();
     test_error_cases();
+    test_map_duplicate_keys();
     printf("All C99 runtime unit tests passed!\n");
     return 0;
 }

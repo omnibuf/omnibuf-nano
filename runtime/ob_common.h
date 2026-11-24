@@ -91,7 +91,7 @@ struct ob_ostream {
     /* If callback == NULL, acts as a sizing stream (increments bytes_written only). */
     bool (*callback)(ob_ostream_t *stream, const uint8_t *buf, size_t count);
     void *state;
-    size_t max_size;       /* 0 = unlimited */
+    size_t max_size;       /* Maximum bytes to write (SIZE_MAX = unlimited) */
     size_t bytes_written;
     const char *errmsg;
 };

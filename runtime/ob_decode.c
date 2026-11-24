@@ -442,6 +442,153 @@ static bool decode_array_field(ob_istream_t *stream, const ob_field_t *field,
     return true;
 }
 
+static bool map_keys_equal(const ob_field_t *kfield, const void *a, const void *b) {
+    switch (kfield->wire_type) {
+    case OB_WIRE_STRING:
+        return strcmp((const char *)a, (const char *)b) == 0;
+    case OB_WIRE_BOOL_FALSE: {
+        bool va = false;
+        bool vb = false;
+        memcpy(&va, a, sizeof(va));
+        memcpy(&vb, b, sizeof(vb));
+        return va == vb;
+    }
+    case OB_WIRE_BYTES:
+        if ((kfield->flags & OB_FLAG_FIXED_LEN) != 0u) {
+            return memcmp(a, b, kfield->data_size) == 0;
+        } else {
+            uint16_t sa = 0;
+            uint16_t sb = 0;
+            memcpy(&sa, a, sizeof(sa));
+            memcpy(&sb, b, sizeof(sb));
+            if (sa != sb) {
+                return false;
+            }
+            return memcmp((const uint8_t *)a + sizeof(uint16_t),
+                          (const uint8_t *)b + sizeof(uint16_t), sa) == 0;
+        }
+    case OB_WIRE_UINT:
+    case OB_WIRE_SINT:
+    case OB_WIRE_FIXED32:
+    case OB_WIRE_SFIXED32:
+    case OB_WIRE_FIXED64:
+    case OB_WIRE_SFIXED64:
+        return memcmp(a, b, kfield->data_size) == 0;
+    default:
+        return false;
+    }
+}
+
+static void zero_field_value(const ob_field_t *field, void *ptr) {
+    if (field->wire_type == OB_WIRE_BYTES && (field->flags & OB_FLAG_FIXED_LEN) == 0u) {
+        memset(ptr, 0, OB_BYTES_STRIDE(field->data_size));
+    } else {
+        memset(ptr, 0, field->data_size);
+    }
+}
+
+/* Decode a map key from sub when the map array is already at max_count, and
+ * check whether it matches an existing entry in [0, cur_count). */
+static bool find_existing_map_key(ob_istream_t *sub, const ob_field_t *kfield,
+                                  const uint8_t *arr_ptr, uint16_t cur_count,
+                                  size_t stride, unsigned int depth,
+                                  bool *found_out, uint16_t *idx_out) {
+    *found_out = false;
+    *idx_out = 0u;
+
+    if (kfield->wire_type == OB_WIRE_STRING) {
+        uint64_t slen = 0;
+        if (!ob_varint_decode(sub, &slen)) {
+            return false;
+        }
+        if (kfield->data_size == 0u || slen >= (uint64_t)kfield->data_size) {
+            OB_RETURN_ERROR(sub, "string exceeds max_size");
+        }
+        if (slen > (uint64_t)sub->bytes_left) {
+            OB_RETURN_ERROR(sub, "string length exceeds stream");
+        }
+        if (slen < 256u) {
+            char tmp[256];
+            if (!ob_read(sub, (uint8_t *)tmp, (size_t)slen)) {
+                return false;
+            }
+            tmp[slen] = '\0';
+            for (size_t k = 0; k < (size_t)slen; k++) {
+                if (tmp[k] == '\0') {
+                    OB_RETURN_ERROR(sub, "embedded NUL in string");
+                }
+            }
+            if (!ob_valid_utf8((const uint8_t *)tmp, (size_t)slen)) {
+                OB_RETURN_ERROR(sub, "invalid UTF-8 in string");
+            }
+            for (uint16_t j = 0; j < cur_count; j++) {
+                const uint8_t *existing_key = arr_ptr + ((size_t)j * stride) + kfield->data_offset;
+                if (strcmp((const char *)existing_key, tmp) == 0) {
+                    *found_out = true;
+                    *idx_out = j;
+                    return true;
+                }
+            }
+            return true;
+        }
+        /* Large string key (>= 256 bytes): compare in 64-byte chunks against existing keys.
+         * Since struct_size <= 65535 and stride >= data_size >= 257, cur_count <= 255. */
+        uint8_t cand_bits[32];
+        memset(cand_bits, 0, sizeof(cand_bits));
+        uint16_t limit = (cur_count < 256u) ? cur_count : 256u;
+        for (uint16_t j = 0; j < limit; j++) {
+            const char *existing_key = (const char *)(arr_ptr + ((size_t)j * stride) + kfield->data_offset);
+            if (strlen(existing_key) == (size_t)slen) {
+                cand_bits[j / 8u] |= (uint8_t)(1u << (j % 8u));
+            }
+        }
+        uint8_t chunk[64];
+        size_t off = 0u;
+        while (off < (size_t)slen) {
+            size_t rem = (size_t)slen - off;
+            size_t take = (rem > sizeof(chunk)) ? sizeof(chunk) : rem;
+            if (!ob_read(sub, chunk, take)) {
+                return false;
+            }
+            for (uint16_t j = 0; j < limit; j++) {
+                if ((cand_bits[j / 8u] & (uint8_t)(1u << (j % 8u))) != 0u) {
+                    const uint8_t *existing_key = arr_ptr + ((size_t)j * stride) + kfield->data_offset;
+                    if (memcmp(existing_key + off, chunk, take) != 0) {
+                        cand_bits[j / 8u] &= (uint8_t)~(1u << (j % 8u));
+                    }
+                }
+            }
+            off += take;
+        }
+        for (uint16_t j = 0; j < limit; j++) {
+            if ((cand_bits[j / 8u] & (uint8_t)(1u << (j % 8u))) != 0u) {
+                *found_out = true;
+                *idx_out = j;
+                return true;
+            }
+        }
+        return true;
+    }
+
+    if (kfield->data_size <= sizeof(uint64_t)) {
+        uint64_t key_buf = 0u;
+        if (!decode_payload(sub, kfield, &key_buf, depth)) {
+            return false;
+        }
+        for (uint16_t j = 0; j < cur_count; j++) {
+            const uint8_t *existing_key = arr_ptr + ((size_t)j * stride) + kfield->data_offset;
+            if (map_keys_equal(kfield, existing_key, &key_buf)) {
+                *found_out = true;
+                *idx_out = j;
+                return true;
+            }
+        }
+        return true;
+    }
+
+    return true;
+}
+
 static bool decode_map_field(ob_istream_t *stream, const ob_field_t *field,
                              uint8_t *base, unsigned int depth) {
     if (depth + 1u > OB_MAX_DEPTH) {
@@ -483,36 +630,71 @@ static bool decode_map_field(ob_istream_t *stream, const ob_field_t *field,
         OB_RETURN_ERROR(stream, "map count exceeds body size");
     }
 
-    uint16_t existing = 0;
-    memcpy(&existing, base + field->size_offset, sizeof(existing));
-    if (existing > field->array_size || count > (uint64_t)(field->array_size - existing)) {
+    uint16_t cur_count = 0;
+    memcpy(&cur_count, base + field->size_offset, sizeof(cur_count));
+    if (cur_count > field->array_size) {
         OB_RETURN_ERROR(stream, "map count exceeds max_count");
     }
 
     uint8_t *arr_ptr = base + field->data_offset;
     size_t stride = (size_t)field->data_size;
     for (uint64_t i = 0; i < count; i++) {
-        uint8_t *entry = arr_ptr + ((size_t)(existing + i) * stride);
-        memset(entry, 0, stride);
-        if (!decode_payload(&sub, kfield, entry + kfield->data_offset, depth + 1u)) {
-            stream->errmsg = sub.errmsg;
-            return false;
+        uint8_t *target = NULL;
+        bool is_new = false;
+
+        if (cur_count < field->array_size) {
+            uint8_t *slot = arr_ptr + ((size_t)cur_count * stride);
+            memset(slot, 0, stride);
+            if (!decode_payload(&sub, kfield, slot + kfield->data_offset, depth + 1u)) {
+                stream->errmsg = sub.errmsg;
+                return false;
+            }
+            for (uint16_t j = 0; j < cur_count; j++) {
+                uint8_t *cand = arr_ptr + ((size_t)j * stride);
+                if (map_keys_equal(kfield, cand + kfield->data_offset, slot + kfield->data_offset)) {
+                    target = cand;
+                    break;
+                }
+            }
+            if (target != NULL) {
+                memset(slot, 0, stride);
+                zero_field_value(vfield, target + vfield->data_offset);
+            } else {
+                target = slot;
+                is_new = true;
+            }
+        } else {
+            bool found = false;
+            uint16_t match_idx = 0u;
+            if (!find_existing_map_key(&sub, kfield, arr_ptr, cur_count, stride,
+                                       depth + 1u, &found, &match_idx)) {
+                stream->errmsg = sub.errmsg;
+                return false;
+            }
+            if (!found) {
+                OB_RETURN_ERROR(stream, "map count exceeds max_count");
+            }
+            target = arr_ptr + ((size_t)match_idx * stride);
+            zero_field_value(vfield, target + vfield->data_offset);
         }
-        if (!decode_payload(&sub, vfield, entry + vfield->data_offset, depth + 1u)) {
+
+        if (!decode_payload(&sub, vfield, target + vfield->data_offset, depth + 1u)) {
             stream->errmsg = sub.errmsg;
             return false;
         }
         if ((vfield->flags & OB_FLAG_OPTIONAL) != 0u) {
             bool has_val = true;
-            memcpy(entry + vfield->size_offset, &has_val, sizeof(has_val));
+            memcpy(target + vfield->size_offset, &has_val, sizeof(has_val));
+        }
+        if (is_new) {
+            cur_count++;
         }
     }
 
     if (sub.bytes_left != 0u) {
         OB_RETURN_ERROR(stream, "map trailing bytes");
     }
-    uint16_t new_count = (uint16_t)(existing + count);
-    memcpy(base + field->size_offset, &new_count, sizeof(new_count));
+    memcpy(base + field->size_offset, &cur_count, sizeof(cur_count));
     stream->state = sub.state;
     stream->bytes_left -= (size_t)body_len;
     return true;
@@ -529,8 +711,10 @@ static bool decode_msg_depth(ob_istream_t *stream, const ob_msgdesc_t *desc,
     bool check_required = false;
     for (uint16_t i = 0; i < desc->field_count; i++) {
         if ((desc->fields[i].flags & OB_FLAG_REQUIRED) != 0u) {
+            if (i >= 256u) {
+                OB_RETURN_ERROR(stream, "required field index exceeds 255");
+            }
             check_required = true;
-            break;
         }
     }
     if (check_required) {

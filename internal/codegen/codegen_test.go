@@ -1,6 +1,7 @@
 package codegen_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,29 +127,39 @@ message Parent {
 		t.Errorf("fixed_length bytes did not emit raw uint8_t array:\n%s", header)
 	}
 
-	// Verify generated C code compiles cleanly under strict C99.
+	// Verify generated C code compiles cleanly under strict C99 and -fshort-enums.
 	tmpDir := t.TempDir()
 	for _, gf := range out {
 		if err := os.WriteFile(filepath.Join(tmpDir, gf.Path), []byte(gf.Content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// Add a compile-time check that enums remain signed 32-bit even under -fshort-enums.
+	enumCheckPath := filepath.Join(tmpDir, "check_enum.c")
+	enumCheckSrc := `#include "sample.ob.h"
+typedef char _check_enum_size[(sizeof(demo_Mode) == 4u) ? 1 : -1];
+typedef char _check_enum_signed[(((demo_Mode)-1) < 0) ? 1 : -1];
+`
+	if err := os.WriteFile(enumCheckPath, []byte(enumCheckSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	runtimeDir, err := filepath.Abs("../../runtime")
 	if err != nil {
 		t.Fatal(err)
 	}
-	objOut := filepath.Join(tmpDir, "sample.ob.o")
-	cc := exec.Command("cc",
-		"-Wall", "-Wextra", "-Werror", "-std=c99", "-pedantic",
-		"-c",
-		"-I", runtimeDir,
-		"-I", tmpDir,
-		filepath.Join(tmpDir, "sample.ob.c"),
-		"-o", objOut,
-	)
-	if ccOut, err := cc.CombinedOutput(); err != nil {
-		t.Fatalf("generated C failed strict C99 compile: %v\n%s\n--- header ---\n%s\n--- source ---\n%s",
-			err, string(ccOut), header, source)
+	for _, extraFlags := range [][]string{nil, {"-fshort-enums"}} {
+		for _, srcFile := range []string{"sample.ob.c", "check_enum.c"} {
+			args := []string{"-Wall", "-Wextra", "-Werror", "-std=c99", "-pedantic"}
+			args = append(args, extraFlags...)
+			args = append(args, "-c", "-I", runtimeDir, "-I", tmpDir,
+				filepath.Join(tmpDir, srcFile),
+				"-o", filepath.Join(tmpDir, srcFile+".o"))
+			cc := exec.Command("cc", args...)
+			if ccOut, err := cc.CombinedOutput(); err != nil {
+				t.Fatalf("generated C failed strict C99 compile (%v, %s): %v\n%s\n--- header ---\n%s\n--- source ---\n%s",
+					extraFlags, srcFile, err, string(ccOut), header, source)
+			}
+		}
 	}
 }
 
@@ -185,5 +196,21 @@ func TestBoundsExceedingUint16Rejected(t *testing.T) {
 	}
 	if _, err := codegen.Generate(fd, codegen.Config{Sidecar: sidecar}); err == nil {
 		t.Fatal("expected codegen error when max_size exceeds uint16 limit")
+	}
+}
+
+func TestRequiredFieldBeyond255Rejected(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("syntax = \"proto2\";\nmessage ManyFields {\n")
+	for i := 1; i <= 256; i++ {
+		fmt.Fprintf(&b, "  optional int32 f%d = %d;\n", i, i)
+	}
+	b.WriteString("  required int32 req_late = 257;\n}\n")
+
+	fd := compileProtoDescriptor(t, map[string]string{
+		"many.proto": b.String(),
+	}, "many.proto")
+	if _, err := codegen.Generate(fd, codegen.Config{}); err == nil {
+		t.Fatal("expected codegen error for required field at descriptor index >= 256")
 	}
 }

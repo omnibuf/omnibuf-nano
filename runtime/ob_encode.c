@@ -25,9 +25,8 @@ bool ob_write(ob_ostream_t *stream, const uint8_t *buf, size_t count) {
     if (count > (SIZE_MAX - stream->bytes_written)) {
         OB_RETURN_ERROR(stream, "size overflow");
     }
-    if (stream->max_size != 0u &&
-        (stream->bytes_written > stream->max_size ||
-         (stream->max_size - stream->bytes_written) < count)) {
+    if (stream->bytes_written > stream->max_size ||
+        (stream->max_size - stream->bytes_written) < count) {
         OB_RETURN_ERROR(stream, "stream full");
     }
     if (stream->callback == buf_write_callback) {
@@ -207,7 +206,7 @@ static bool encode_payload(ob_ostream_t *stream, const ob_field_t *field,
         if (field->submsg == NULL) {
             OB_RETURN_ERROR(stream, "missing submsg descriptor");
         }
-        ob_ostream_t sizing = {NULL, NULL, 0u, 0u, NULL};
+        ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, 0u, NULL};
         if (!encode_msg_depth(&sizing, field->submsg, ptr, depth + 1u)) {
             stream->errmsg = sizing.errmsg;
             return false;
@@ -256,7 +255,7 @@ static bool encode_array_body(ob_ostream_t *stream, const ob_field_t *field,
             const uint8_t *elem_ptr = arr_ptr + ((size_t)i * stride);
             size_t sub_len = 0u;
             if (stream->callback == NULL) {
-                ob_ostream_t sizing = {NULL, NULL, 0u, 0u, NULL};
+                ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, 0u, NULL};
                 if (!encode_msg_depth(&sizing, field->submsg, elem_ptr, depth + 1u)) {
                     stream->errmsg = sizing.errmsg;
                     return false;
@@ -275,7 +274,7 @@ static bool encode_array_body(ob_ostream_t *stream, const ob_field_t *field,
                 if (cached_sizes != NULL && i < cache_cap) {
                     sub_len = cached_sizes[i];
                 } else {
-                    ob_ostream_t sizing = {NULL, NULL, 0u, 0u, NULL};
+                    ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, 0u, NULL};
                     if (!encode_msg_depth(&sizing, field->submsg, elem_ptr, depth + 1u)) {
                         stream->errmsg = sizing.errmsg;
                         return false;
@@ -318,7 +317,7 @@ static bool encode_repeated_field(ob_ostream_t *stream, const ob_field_t *field,
     }
     size_t cached_sizes[OB_ELEM_SIZE_CACHE_LEN];
     size_t *cache_ptr = (field->wire_type == OB_WIRE_SUBMSG) ? cached_sizes : NULL;
-    ob_ostream_t sizing = {NULL, NULL, 0u, 0u, NULL};
+    ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, 0u, NULL};
     if (!encode_array_body(&sizing, field, data_ptr, count,
                            cache_ptr, OB_ELEM_SIZE_CACHE_LEN, depth + 1u)) {
         stream->errmsg = sizing.errmsg;
@@ -426,7 +425,7 @@ static bool encode_field(ob_ostream_t *stream, const ob_field_t *field,
         if (count > field->array_size) {
             OB_RETURN_ERROR(stream, "map count exceeds max_count");
         }
-        ob_ostream_t sizing = {NULL, NULL, 0u, 0u, NULL};
+        ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, 0u, NULL};
         if (!encode_map_body(&sizing, field, data_ptr, count, depth + 1u)) {
             stream->errmsg = sizing.errmsg;
             return false;
@@ -508,7 +507,7 @@ bool ob_get_encoded_size(size_t *size, const ob_msgdesc_t *desc, const void *src
     if (size == NULL || desc == NULL || src_struct == NULL) {
         return false;
     }
-    ob_ostream_t sizing = {NULL, NULL, 0u, 0u, NULL};
+    ob_ostream_t sizing = {NULL, NULL, SIZE_MAX, 0u, NULL};
     if (!encode_msg_depth(&sizing, desc, src_struct, 0u)) {
         return false;
     }

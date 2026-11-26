@@ -152,7 +152,7 @@ func (g *fileGenerator) renderSource(headerPath string) (string, error) {
 					sizeOff = fmt.Sprintf("offsetof(%s, has_%s)", rm.cName, rf.cName)
 				}
 
-				if !rf.desc.IsMap() && rf.desc.Kind() == protoreflect.MessageKind {
+				if !rf.desc.IsMap() && isMessageField(rf.desc) {
 					submsg = fmt.Sprintf("&%s_msg", cTypeName(rf.desc.Message().FullName()))
 				}
 
@@ -186,6 +186,9 @@ func (g *fileGenerator) renderSource(headerPath string) (string, error) {
 }
 
 func fieldDecl(rf *resolvedField) string {
+	if isMessageField(rf.desc) {
+		return fmt.Sprintf("%s %s", cTypeName(rf.desc.Message().FullName()), rf.cName)
+	}
 	switch rf.desc.Kind() {
 	case protoreflect.StringKind:
 		return fmt.Sprintf("char %s[%du]", rf.cName, rf.opts.MaxSize)
@@ -194,8 +197,6 @@ func fieldDecl(rf *resolvedField) string {
 			return fmt.Sprintf("uint8_t %s[%du]", rf.cName, rf.opts.MaxSize)
 		}
 		return fmt.Sprintf("OB_BYTES_ARRAY_T(%du) %s", rf.opts.MaxSize, rf.cName)
-	case protoreflect.MessageKind:
-		return fmt.Sprintf("%s %s", cTypeName(rf.desc.Message().FullName()), rf.cName)
 	case protoreflect.EnumKind:
 		return fmt.Sprintf("%s %s", cTypeName(rf.desc.Enum().FullName()), rf.cName)
 	default:
@@ -204,6 +205,9 @@ func fieldDecl(rf *resolvedField) string {
 }
 
 func repeatedFieldDecl(rf *resolvedField) string {
+	if isMessageField(rf.desc) {
+		return fmt.Sprintf("%s %s[%du]", cTypeName(rf.desc.Message().FullName()), rf.cName, rf.opts.MaxCount)
+	}
 	switch rf.desc.Kind() {
 	case protoreflect.StringKind:
 		return fmt.Sprintf("char %s[%du][%du]", rf.cName, rf.opts.MaxCount, rf.opts.MaxSize)
@@ -212,8 +216,6 @@ func repeatedFieldDecl(rf *resolvedField) string {
 			return fmt.Sprintf("uint8_t %s[%du][%du]", rf.cName, rf.opts.MaxCount, rf.opts.MaxSize)
 		}
 		return fmt.Sprintf("OB_BYTES_ARRAY_T(%du) %s[%du]", rf.opts.MaxSize, rf.cName, rf.opts.MaxCount)
-	case protoreflect.MessageKind:
-		return fmt.Sprintf("%s %s[%du]", cTypeName(rf.desc.Message().FullName()), rf.cName, rf.opts.MaxCount)
 	case protoreflect.EnumKind:
 		return fmt.Sprintf("%s %s[%du]", cTypeName(rf.desc.Enum().FullName()), rf.cName, rf.opts.MaxCount)
 	default:
@@ -222,11 +224,12 @@ func repeatedFieldDecl(rf *resolvedField) string {
 }
 
 func fieldDataSizeExpr(msgCName string, rf *resolvedField) string {
+	if isMessageField(rf.desc) {
+		return fmt.Sprintf("sizeof(%s)", cTypeName(rf.desc.Message().FullName()))
+	}
 	switch rf.desc.Kind() {
 	case protoreflect.StringKind, protoreflect.BytesKind:
 		return fmt.Sprintf("%du", rf.opts.MaxSize)
-	case protoreflect.MessageKind:
-		return fmt.Sprintf("sizeof(%s)", cTypeName(rf.desc.Message().FullName()))
 	case protoreflect.EnumKind:
 		return fmt.Sprintf("sizeof(%s)", cTypeName(rf.desc.Enum().FullName()))
 	default:

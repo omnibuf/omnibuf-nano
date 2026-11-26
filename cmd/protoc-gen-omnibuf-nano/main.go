@@ -8,6 +8,7 @@ import (
 	"github.com/bufbuild/protoplugin"
 	"github.com/omnibuf/omnibuf-nano/internal/codegen"
 	"github.com/omnibuf/omnibuf-nano/internal/options"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 func main() {
@@ -21,6 +22,10 @@ func handle(
 	request protoplugin.Request,
 ) error {
 	responseWriter.SetFeatureProto3Optional()
+	responseWriter.SetFeatureSupportsEditions(
+		descriptorpb.Edition_EDITION_2023,
+		descriptorpb.Edition_EDITION_2026,
+	)
 
 	var explicitOptionsFile string
 	var searchDirs []string

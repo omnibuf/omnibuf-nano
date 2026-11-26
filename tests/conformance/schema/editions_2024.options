@@ -1,0 +1,8 @@
+# Static bounds for canonical editions_2024.proto conformance schema
+Editions2024Child.note max_size:64
+TestEditions2024.explicit_string max_size:64
+TestEditions2024.explicit_bytes max_size:32
+TestEditions2024.packed_vals max_count:8
+TestEditions2024.expanded_vals max_count:8
+TestEditions2024.scores max_count:8 max_size:32
+TestEditions2024.choice_text max_size:64

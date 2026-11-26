@@ -21,6 +21,10 @@ type GeneratedFile struct {
 
 // Generate emits <stem>.ob.h and <stem>.ob.c for fd.
 func Generate(fd protoreflect.FileDescriptor, cfg Config) ([]GeneratedFile, error) {
+	if err := validateEditionsFile(fd); err != nil {
+		return nil, err
+	}
+
 	fileDefaults := extractFileOptions(fd)
 
 	g := &fileGenerator{

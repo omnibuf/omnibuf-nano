@@ -806,6 +806,254 @@ static void test_map_duplicate_keys(void) {
     }
 }
 
+static void test_optional_explicit_presence_all_types(void) {
+    typedef int32_t TestOpenEnum;
+    typedef struct {
+        bool has_i32;
+        int32_t i32;
+        bool has_i64;
+        int64_t i64;
+        bool has_u32;
+        uint32_t u32;
+        bool has_u64;
+        uint64_t u64;
+        bool has_s32;
+        int32_t s32;
+        bool has_s64;
+        int64_t s64;
+        bool has_f32;
+        uint32_t f32;
+        bool has_f64;
+        uint64_t f64;
+        bool has_sf32;
+        int32_t sf32;
+        bool has_sf64;
+        int64_t sf64;
+        bool has_fl;
+        float fl;
+        bool has_db;
+        double db;
+        bool has_b;
+        bool b;
+        bool has_en;
+        TestOpenEnum en;
+        bool has_str;
+        char str[16];
+        bool has_raw;
+        OB_BYTES_ARRAY_T(16) raw;
+        bool has_fixraw;
+        uint8_t fixraw[4];
+        bool has_sub;
+        SubMsg sub;
+        uint16_t which_o;
+        union {
+            int32_t o_i32;
+            bool o_bool;
+            char o_str[16];
+            OB_BYTES_ARRAY_T(8) o_raw;
+            SubMsg o_sub;
+        } o;
+    } OptAllMsg;
+
+    static const ob_field_t opt_fields[] = {
+        {1u,  OB_WIRE_SINT,       OB_FLAG_OPTIONAL, offsetof(OptAllMsg, i32),    offsetof(OptAllMsg, has_i32),    sizeof(int32_t),      1u, NULL},
+        {2u,  OB_WIRE_SINT,       OB_FLAG_OPTIONAL, offsetof(OptAllMsg, i64),    offsetof(OptAllMsg, has_i64),    sizeof(int64_t),      1u, NULL},
+        {3u,  OB_WIRE_UINT,       OB_FLAG_OPTIONAL, offsetof(OptAllMsg, u32),    offsetof(OptAllMsg, has_u32),    sizeof(uint32_t),     1u, NULL},
+        {4u,  OB_WIRE_UINT,       OB_FLAG_OPTIONAL, offsetof(OptAllMsg, u64),    offsetof(OptAllMsg, has_u64),    sizeof(uint64_t),     1u, NULL},
+        {5u,  OB_WIRE_SINT,       OB_FLAG_OPTIONAL, offsetof(OptAllMsg, s32),    offsetof(OptAllMsg, has_s32),    sizeof(int32_t),      1u, NULL},
+        {6u,  OB_WIRE_SINT,       OB_FLAG_OPTIONAL, offsetof(OptAllMsg, s64),    offsetof(OptAllMsg, has_s64),    sizeof(int64_t),      1u, NULL},
+        {7u,  OB_WIRE_FIXED32,    OB_FLAG_OPTIONAL, offsetof(OptAllMsg, f32),    offsetof(OptAllMsg, has_f32),    sizeof(uint32_t),     1u, NULL},
+        {8u,  OB_WIRE_FIXED64,    OB_FLAG_OPTIONAL, offsetof(OptAllMsg, f64),    offsetof(OptAllMsg, has_f64),    sizeof(uint64_t),     1u, NULL},
+        {9u,  OB_WIRE_SFIXED32,   OB_FLAG_OPTIONAL, offsetof(OptAllMsg, sf32),   offsetof(OptAllMsg, has_sf32),   sizeof(int32_t),      1u, NULL},
+        {10u, OB_WIRE_SFIXED64,   OB_FLAG_OPTIONAL, offsetof(OptAllMsg, sf64),   offsetof(OptAllMsg, has_sf64),   sizeof(int64_t),      1u, NULL},
+        {11u, OB_WIRE_FLOAT32,    OB_FLAG_OPTIONAL, offsetof(OptAllMsg, fl),     offsetof(OptAllMsg, has_fl),     sizeof(float),        1u, NULL},
+        {12u, OB_WIRE_FLOAT64,    OB_FLAG_OPTIONAL, offsetof(OptAllMsg, db),     offsetof(OptAllMsg, has_db),     sizeof(double),       1u, NULL},
+        {13u, OB_WIRE_BOOL_FALSE, OB_FLAG_OPTIONAL, offsetof(OptAllMsg, b),      offsetof(OptAllMsg, has_b),      sizeof(bool),         1u, NULL},
+        {14u, OB_WIRE_SINT,       OB_FLAG_OPTIONAL, offsetof(OptAllMsg, en),     offsetof(OptAllMsg, has_en),     sizeof(TestOpenEnum), 1u, NULL},
+        {15u, OB_WIRE_STRING,     OB_FLAG_OPTIONAL, offsetof(OptAllMsg, str),    offsetof(OptAllMsg, has_str),    16u,                  1u, NULL},
+        {16u, OB_WIRE_BYTES,      OB_FLAG_OPTIONAL, offsetof(OptAllMsg, raw),    offsetof(OptAllMsg, has_raw),    16u,                  1u, NULL},
+        {17u, OB_WIRE_BYTES,      OB_FLAG_OPTIONAL | OB_FLAG_FIXED_LEN, offsetof(OptAllMsg, fixraw), offsetof(OptAllMsg, has_fixraw), 4u, 1u, NULL},
+        {18u, OB_WIRE_SUBMSG,     OB_FLAG_OPTIONAL, offsetof(OptAllMsg, sub),    offsetof(OptAllMsg, has_sub),    sizeof(SubMsg),       1u, &SubMsg_msg},
+        {19u, OB_WIRE_SINT,       OB_FLAG_ONEOF,    offsetof(OptAllMsg, o.o_i32),  offsetof(OptAllMsg, which_o),  sizeof(int32_t),      1u, NULL},
+        {20u, OB_WIRE_BOOL_FALSE, OB_FLAG_ONEOF,    offsetof(OptAllMsg, o.o_bool), offsetof(OptAllMsg, which_o),  sizeof(bool),         1u, NULL},
+        {21u, OB_WIRE_STRING,     OB_FLAG_ONEOF,    offsetof(OptAllMsg, o.o_str),  offsetof(OptAllMsg, which_o),  16u,                  1u, NULL},
+        {22u, OB_WIRE_BYTES,      OB_FLAG_ONEOF,    offsetof(OptAllMsg, o.o_raw),  offsetof(OptAllMsg, which_o),  8u,                   1u, NULL},
+        {23u, OB_WIRE_SUBMSG,     OB_FLAG_ONEOF,    offsetof(OptAllMsg, o.o_sub),  offsetof(OptAllMsg, which_o),  sizeof(SubMsg),       1u, &SubMsg_msg}
+    };
+    static const ob_msgdesc_t opt_desc = {opt_fields, 23u, sizeof(OptAllMsg)};
+
+    /* 1. All absent -> 0 wire bytes */
+    {
+        OptAllMsg src;
+        memset(&src, 0, sizeof(src));
+        uint8_t wire[256];
+        ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_encode(&os, &opt_desc, &src));
+        assert(os.bytes_written == 0u);
+
+        OptAllMsg dst;
+        memset(&dst, 0xAA, sizeof(dst));
+        ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(ob_decode(&is, &opt_desc, &dst));
+        assert(!dst.has_i32 && !dst.has_i64 && !dst.has_u32 && !dst.has_u64);
+        assert(!dst.has_s32 && !dst.has_s64 && !dst.has_f32 && !dst.has_f64);
+        assert(!dst.has_sf32 && !dst.has_sf64 && !dst.has_fl && !dst.has_db);
+        assert(!dst.has_b && !dst.has_en && !dst.has_str && !dst.has_raw);
+        assert(!dst.has_fixraw && !dst.has_sub && dst.which_o == 0u);
+    }
+
+    /* 2. All present with explicit zero/false/empty values -> every field encoded & preserved */
+    {
+        OptAllMsg src;
+        memset(&src, 0, sizeof(src));
+        src.has_i32 = true;
+        src.has_i64 = true;
+        src.has_u32 = true;
+        src.has_u64 = true;
+        src.has_s32 = true;
+        src.has_s64 = true;
+        src.has_f32 = true;
+        src.has_f64 = true;
+        src.has_sf32 = true;
+        src.has_sf64 = true;
+        src.has_fl = true;
+        src.has_db = true;
+        src.has_b = true;
+        src.b = false;
+        src.has_en = true;
+        src.en = 0;
+        src.has_str = true;
+        src.str[0] = '\0';
+        src.has_raw = true;
+        src.raw.size = 0u;
+        src.has_fixraw = true;
+        src.has_sub = true;
+        src.which_o = 20u;
+        src.o.o_bool = false;
+
+        size_t expected_size = 0u;
+        assert(ob_get_encoded_size(&expected_size, &opt_desc, &src));
+        assert(expected_size > 0u);
+
+        uint8_t wire[512];
+        chunk_stream_state_t wst = {wire, 0u, sizeof(wire), 0u};
+        ob_ostream_t os = {byte_write_cb, &wst, sizeof(wire), 0u, NULL};
+        assert(ob_encode(&os, &opt_desc, &src));
+        assert(os.bytes_written == expected_size);
+
+        OptAllMsg dst;
+        memset(&dst, 0xAA, sizeof(dst));
+        ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(ob_decode(&is, &opt_desc, &dst));
+        assert(is.bytes_left == 0u);
+
+        assert(dst.has_i32 && dst.i32 == 0);
+        assert(dst.has_i64 && dst.i64 == 0);
+        assert(dst.has_u32 && dst.u32 == 0u);
+        assert(dst.has_u64 && dst.u64 == 0u);
+        assert(dst.has_s32 && dst.s32 == 0);
+        assert(dst.has_s64 && dst.s64 == 0);
+        assert(dst.has_f32 && dst.f32 == 0u);
+        assert(dst.has_f64 && dst.f64 == 0u);
+        assert(dst.has_sf32 && dst.sf32 == 0);
+        assert(dst.has_sf64 && dst.sf64 == 0);
+        assert(dst.has_fl && dst.fl == 0.0f);
+        assert(dst.has_db && dst.db == 0.0);
+        assert(dst.has_b && dst.b == false);
+        assert(dst.has_en && dst.en == 0);
+        assert(dst.has_str && dst.str[0] == '\0');
+        assert(dst.has_raw && dst.raw.size == 0u);
+        assert(dst.has_fixraw && dst.fixraw[0] == 0u && dst.fixraw[3] == 0u);
+        assert(dst.has_sub && dst.sub.id == 0 && dst.sub.label[0] == '\0');
+        assert(dst.which_o == 20u && dst.o.o_bool == false);
+    }
+
+    /* 3. Explicit bool=false encodes OB_WIRE_BOOL_FALSE tag with 0 payload bytes */
+    {
+        OptAllMsg src;
+        memset(&src, 0, sizeof(src));
+        src.has_b = true;
+        src.b = false;
+
+        uint8_t wire[16];
+        ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_encode(&os, &opt_desc, &src));
+        /* tag=13, wt=OB_WIRE_BOOL_FALSE(2) -> raw=(13<<4)|2=210 -> 2-byte varint ((210<<2)|2)=0x034A */
+        assert(os.bytes_written == 2u);
+        assert(wire[0] == 0x4Au && wire[1] == 0x03u);
+    }
+
+    /* 4. Oneof active zero/empty arms & branch switching on wire */
+    {
+        const uint16_t zero_tags[] = {19u, 20u, 21u, 22u, 23u};
+        for (size_t i = 0; i < sizeof(zero_tags) / sizeof(zero_tags[0]); i++) {
+            OptAllMsg src;
+            memset(&src, 0, sizeof(src));
+            src.which_o = zero_tags[i];
+
+            uint8_t wire[64];
+            ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+            assert(ob_encode(&os, &opt_desc, &src));
+            assert(os.bytes_written > 0u);
+
+            OptAllMsg dst;
+            memset(&dst, 0xAA, sizeof(dst));
+            ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+            assert(ob_decode(&is, &opt_desc, &dst));
+            assert(dst.which_o == zero_tags[i]);
+        }
+
+        /* Wire stream switching oneof branches: str("hello") -> bool(false) -> sub({label:"ok"}) -> i32(0) */
+        uint8_t wire[128];
+        ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+        assert(ob_write_tag(&os, 21u, OB_WIRE_STRING));
+        assert(ob_varint_encode(&os, 5u));
+        assert(ob_write(&os, (const uint8_t *)"hello", 5u));
+        assert(ob_write_tag(&os, 20u, OB_WIRE_BOOL_FALSE));
+        assert(ob_write_tag(&os, 23u, OB_WIRE_SUBMSG));
+        assert(ob_varint_encode(&os, 4u));
+        assert(ob_write_tag(&os, 2u, OB_WIRE_STRING));
+        assert(ob_varint_encode(&os, 2u));
+        assert(ob_write(&os, (const uint8_t *)"ok", 2u));
+
+        OptAllMsg dst;
+        ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(ob_decode(&is, &opt_desc, &dst));
+        assert(dst.which_o == 23u);
+        assert(dst.o.o_sub.id == 0);
+        assert(strcmp(dst.o.o_sub.label, "ok") == 0);
+
+        /* Append tag 19 (o_i32 = 0) to switch away from submsg */
+        assert(ob_write_tag(&os, 19u, OB_WIRE_SINT));
+        assert(ob_varint_encode(&os, 0u));
+        is = ob_istream_from_buffer(wire, os.bytes_written);
+        assert(ob_decode(&is, &opt_desc, &dst));
+        assert(dst.which_o == 19u);
+        assert(dst.o.o_i32 == 0);
+    }
+
+    /* 5. Open enum unknown positive & negative values preserved */
+    {
+        const TestOpenEnum vals[] = {0, 4242, -99};
+        for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
+            OptAllMsg src;
+            memset(&src, 0, sizeof(src));
+            src.has_en = true;
+            src.en = vals[i];
+
+            uint8_t wire[32];
+            ob_ostream_t os = ob_ostream_from_buffer(wire, sizeof(wire));
+            assert(ob_encode(&os, &opt_desc, &src));
+            assert(os.bytes_written > 0u);
+
+            OptAllMsg dst;
+            ob_istream_t is = ob_istream_from_buffer(wire, os.bytes_written);
+            assert(ob_decode(&is, &opt_desc, &dst));
+            assert(dst.has_en && dst.en == vals[i]);
+        }
+    }
+}
+
 int main(void) {
     test_varint_boundaries();
     test_zigzag();
@@ -814,6 +1062,7 @@ int main(void) {
     test_skip_field0_and_unknowns();
     test_error_cases();
     test_map_duplicate_keys();
+    test_optional_explicit_presence_all_types();
     printf("All C99 runtime unit tests passed!\n");
     return 0;
 }

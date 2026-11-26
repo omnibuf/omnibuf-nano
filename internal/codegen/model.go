@@ -172,7 +172,7 @@ func (g *fileGenerator) buildMessage(md protoreflect.MessageDescriptor, mapParen
 			if fopts.MaxCount == 0 {
 				return nil, fmt.Errorf("%s: repeated field requires max_count option", fd.FullName())
 			}
-			wt, err := wireTypeMacro(fd.Kind())
+			wt, err := wireTypeMacro(fd)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", fd.FullName(), err)
 			}
@@ -185,7 +185,7 @@ func (g *fileGenerator) buildMessage(md protoreflect.MessageDescriptor, mapParen
 				return nil, fmt.Errorf("%s: repeated %s field requires max_size option", fd.FullName(), fd.Kind())
 			}
 		} else {
-			wt, err := wireTypeMacro(fd.Kind())
+			wt, err := wireTypeMacro(fd)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", fd.FullName(), err)
 			}
@@ -255,7 +255,7 @@ func (g *fileGenerator) topoSort(msgs []*resolvedMessage) ([]*resolvedMessage, e
 			var dep *resolvedMessage
 			if rf.mapEntry != nil {
 				dep = rf.mapEntry
-			} else if rf.desc.Kind() == protoreflect.MessageKind {
+			} else if isMessageField(rf.desc) {
 				if target, ok := g.msgByKey[rf.desc.Message().FullName()]; ok {
 					dep = target
 				}
@@ -280,8 +280,11 @@ func (g *fileGenerator) topoSort(msgs []*resolvedMessage) ([]*resolvedMessage, e
 	return out, nil
 }
 
-func wireTypeMacro(k protoreflect.Kind) (string, error) {
-	switch k {
+func wireTypeMacro(fd protoreflect.FieldDescriptor) (string, error) {
+	if isMessageField(fd) {
+		return "OB_WIRE_SUBMSG", nil
+	}
+	switch fd.Kind() {
 	case protoreflect.Uint32Kind, protoreflect.Uint64Kind:
 		return "OB_WIRE_UINT", nil
 	case protoreflect.EnumKind, protoreflect.Int32Kind, protoreflect.Sint32Kind,
@@ -305,10 +308,8 @@ func wireTypeMacro(k protoreflect.Kind) (string, error) {
 		return "OB_WIRE_STRING", nil
 	case protoreflect.BytesKind:
 		return "OB_WIRE_BYTES", nil
-	case protoreflect.MessageKind:
-		return "OB_WIRE_SUBMSG", nil
 	default:
-		return "", fmt.Errorf("unsupported protobuf field kind %v", k)
+		return "", fmt.Errorf("unsupported protobuf field kind %v", fd.Kind())
 	}
 }
 

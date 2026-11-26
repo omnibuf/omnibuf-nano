@@ -19,7 +19,7 @@ jobs:
       run:
         working-directory: proto
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: bufbuild/buf-action@v1
         with:
           setup_only: true
@@ -30,7 +30,7 @@ jobs:
     name: C99 Runtime (ASan/UBSan + Strict Flags)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build and run C99 unit tests (ASan/UBSan)
         run: |
           mkdir -p tests/c_unit/build
@@ -78,7 +78,7 @@ jobs:
     name: Go Codegen & Cross-Language Conformance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27"
@@ -91,7 +91,7 @@ jobs:
     name: Embedded Cross-Compile (ARM Cortex-M0/M4 & AVR 8-bit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install embedded toolchains
         run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi gcc-avr avr-libc
       - name: Cross-compile for ARM Cortex-M0 (-Os -fshort-enums)
